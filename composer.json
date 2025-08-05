@@ -1,0 +1,64 @@
+{
+    "name": "marcosbrendon/apiforge",
+    "description": "Forge powerful APIs with advanced filtering, pagination, and field selection for Laravel applications",
+    "keywords": [
+        "laravel",
+        "api",
+        "filters",
+        "pagination",
+        "field-selection",
+        "eloquent",
+        "rest-api",
+        "query-builder",
+        "apiforge",
+        "forge"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Marcos Brendon",
+            "email": "marcos@markesistemas.com.br",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "laravel/framework": "^10.0|^11.0",
+        "illuminate/support": "^10.0|^11.0",
+        "illuminate/database": "^10.0|^11.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "orchestra/testbench": "^8.0|^9.0",
+        "laravel/pint": "^1.0",
+        "nunomaduro/larastan": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "MarcosBrendon\\ApiForge\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "MarcosBrendon\\ApiForge\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "test-coverage": "vendor/bin/phpunit --coverage-html coverage",
+        "format": "vendor/bin/pint",
+        "analyse": "vendor/bin/phpstan analyse"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "MarcosBrendon\\ApiForge\\ApiForgeServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

@@ -1,0 +1,39 @@
+# Dependencies
+/vendor/
+/node_modules/
+
+# Laravel
+.env
+.env.backup
+.env.production
+.phpunit.result.cache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+storage/logs/
+
+# Coverage
+/coverage/
+clover.xml
+coverage.xml
+
+# Composer
+composer.lock
+
+# Temporary files
+*.tmp
+*.cache
+
+# Build artifacts
+/build/
+/dist/

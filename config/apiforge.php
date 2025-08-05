@@ -1,0 +1,149 @@
+<?php
+
+return [
+    /*
+    |--------------------------------------------------------------------------
+    | Default Pagination Settings
+    |--------------------------------------------------------------------------
+    |
+    | These settings control the default pagination behavior for API endpoints
+    | that use the advanced filtering system.
+    |
+    */
+    'pagination' => [
+        'default_per_page' => 15,
+        'max_per_page' => 100,
+        'min_per_page' => 1,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Field Selection Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure field selection behavior including limits and validation.
+    |
+    */
+    'field_selection' => [
+        'enabled' => true,
+        'max_fields' => 50,
+        'required_fields' => ['id'],
+        'blocked_fields' => ['password', 'remember_token', 'api_token'],
+        'allow_relationships' => true,
+        'max_relationship_depth' => 3,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Filter Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure filtering behavior and available operators.
+    |
+    */
+    'filters' => [
+        'enabled' => true,
+        'case_sensitive' => false,
+        'trim_values' => true,
+        'max_filters' => 20,
+        
+        'available_operators' => [
+            'eq' => ['name' => 'Equals', 'description' => 'Exact match'],
+            'ne' => ['name' => 'Not Equals', 'description' => 'Not equal to'],
+            'like' => ['name' => 'Like', 'description' => 'Contains (use * as wildcard)'],
+            'not_like' => ['name' => 'Not Like', 'description' => 'Does not contain'],
+            'gt' => ['name' => 'Greater Than', 'description' => 'Greater than'],
+            'gte' => ['name' => 'Greater Than or Equal', 'description' => 'Greater than or equal to'],
+            'lt' => ['name' => 'Less Than', 'description' => 'Less than'],
+            'lte' => ['name' => 'Less Than or Equal', 'description' => 'Less than or equal to'],
+            'in' => ['name' => 'In Array', 'description' => 'Value in list (comma separated)'],
+            'not_in' => ['name' => 'Not In Array', 'description' => 'Value not in list'],
+            'between' => ['name' => 'Between', 'description' => 'Between two values (pipe separated)'],
+            'not_between' => ['name' => 'Not Between', 'description' => 'Not between two values'],
+            'null' => ['name' => 'Is Null', 'description' => 'Field is null'],
+            'not_null' => ['name' => 'Is Not Null', 'description' => 'Field is not null'],
+            'starts_with' => ['name' => 'Starts With', 'description' => 'Starts with value'],
+            'ends_with' => ['name' => 'Ends With', 'description' => 'Ends with value'],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Caching Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure caching behavior for API responses.
+    |
+    */
+    'cache' => [
+        'enabled' => false,
+        'default_ttl' => 3600, // 1 hour
+        'key_prefix' => 'api_filters_',
+        'tags' => ['api', 'filters'],
+        'store' => null, // Use default cache store
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Security Settings
+    |--------------------------------------------------------------------------
+    |
+    | Security configuration for filtering and validation.
+    |
+    */
+    'security' => [
+        'sanitize_input' => true,
+        'strip_tags' => true,
+        'max_query_length' => 2000,
+        'blocked_keywords' => [
+            'select', 'insert', 'update', 'delete', 'drop', 'create', 'alter',
+            'union', 'script', 'javascript', 'eval', 'exec'
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Response Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure API response format and metadata.
+    |
+    */
+    'response' => [
+        'include_metadata' => true,
+        'include_filter_info' => true,
+        'include_pagination_info' => true,
+        'timestamp_format' => 'c', // ISO 8601
+        'timezone' => 'UTC',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Validation Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure validation rules and error handling.
+    |
+    */
+    'validation' => [
+        'strict_mode' => false,
+        'ignore_invalid_filters' => true,
+        'validate_field_existence' => true,
+        'validate_relationship_existence' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Debug Settings
+    |--------------------------------------------------------------------------
+    |
+    | Enable debug features for development.
+    |
+    */
+    'debug' => [
+        'enabled' => env('APP_DEBUG', false),
+        'log_queries' => false,
+        'log_filters' => false,
+        'include_query_time' => false,
+    ],
+];
