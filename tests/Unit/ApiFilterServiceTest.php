@@ -172,9 +172,9 @@ class ApiFilterServiceTest extends TestCase
         $bindings = $query->getBindings();
         
         // Check that values are properly cast
-        $this->assertContains(1, $bindings); // true cast to 1
-        $this->assertContains(25, $bindings);
-        $this->assertContains(19.99, $bindings);
+        $this->assertContains(true, $bindings); // boolean true
+        $this->assertContains(25, $bindings);   // integer 25
+        $this->assertContains(19.99, $bindings); // float 19.99
     }
 
     /** @test */

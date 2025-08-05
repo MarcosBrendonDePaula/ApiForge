@@ -63,7 +63,7 @@ class TestCase extends Orchestra
         $this->artisan('migrate', ['--database' => 'testbench']);
 
         // Create test data
-        $this->seed();
+        $this->seedTestData();
     }
 
     /**
@@ -71,7 +71,7 @@ class TestCase extends Orchestra
      *
      * @return void
      */
-    public function seed(): void
+    protected function seedTestData(): void
     {
         // Create test users
         \Illuminate\Support\Facades\DB::table('users')->insert([
