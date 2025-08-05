@@ -71,7 +71,7 @@ class TestCase extends Orchestra
      *
      * @return void
      */
-    protected function seed(): void
+    public function seed(): void
     {
         // Create test users
         \Illuminate\Support\Facades\DB::table('users')->insert([
