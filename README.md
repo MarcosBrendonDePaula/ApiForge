@@ -193,7 +193,7 @@ Add the middleware to automatically validate and sanitize requests:
 
 ```php
 // In your route group
-Route::group(['middleware' => ['api', 'advanced-api-filters']], function () {
+Route::group(['middleware' => ['api', 'apiforge']], function () {
     Route::get('/users', [UserController::class, 'index']);
 });
 ```

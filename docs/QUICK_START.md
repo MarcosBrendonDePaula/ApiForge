@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with Laravel Advanced API Filters in under 5 minutes!
+Get up and running with ApiForge in under 5 minutes!
 
 ## 1. Install the Package
 
@@ -17,7 +17,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\User;
 use Illuminate\Http\Request;
-use MarcosBrendon\LaravelAdvancedApiFilters\Traits\HasAdvancedFilters;
+use MarcosBrendon\ApiForge\Traits\HasAdvancedFilters;
 use App\Http\Controllers\Controller;
 
 class UserController extends Controller

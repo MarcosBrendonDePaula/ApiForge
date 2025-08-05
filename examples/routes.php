@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Example routes configuration for Laravel Advanced API Filters
+ * Example routes configuration for ApiForge
  * 
  * Add these routes to your routes/api.php file
  */
@@ -9,7 +9,7 @@
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\UserWithTraitController;
 
-// Group with the advanced API filters middleware
+// Group with the ApiForge middleware
 Route::group(['prefix' => 'api/v1', 'middleware' => ['api', 'apiforge']], function () {
     
     // Users API with full BaseApiController functionality

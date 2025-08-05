@@ -7,7 +7,7 @@ use Illuminate\Http\Request;
 use MarcosBrendon\ApiForge\Http\Controllers\BaseApiController;
 
 /**
- * Example User Controller using Laravel Advanced API Filters
+ * Example User Controller using ApiForge
  * 
  * This demonstrates how to use the package with a User model
  */
