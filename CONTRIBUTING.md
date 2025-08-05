@@ -47,7 +47,7 @@ People *love* thorough bug reports. I'm not even kidding.
 
 1. Clone the repository
 ```bash
-git clone https://github.com/marcosbrendon/laravel-apiforge.git
+git clone https://github.com/MarcosBrendonDePaula/ApiForge.git
 cd laravel-apiforge
 ```
 

@@ -2,8 +2,8 @@
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/marcosbrendon/apiforge.svg?style=flat-square)](https://packagist.org/packages/marcosbrendon/apiforge)
 [![Total Downloads](https://img.shields.io/packagist/dt/marcosbrendon/apiforge.svg?style=flat-square)](https://packagist.org/packages/marcosbrendon/apiforge)
-[![GitHub Tests Action Status](https://img.shields.io/github/workflow/status/marcosbrendon/apiforge/run-tests?label=tests)](https://github.com/marcosbrendon/apiforge/actions?query=workflow%3Arun-tests+branch%3Amain)
-[![GitHub Code Style Action Status](https://img.shields.io/github/workflow/status/marcosbrendon/apiforge/Fix%20PHP%20code%20style%20issues?label=code%20style)](https://github.com/marcosbrendon/apiforge/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
+[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/MarcosBrendonDePaula/ApiForge/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/MarcosBrendonDePaula/ApiForge/actions)
+[![GitHub License](https://img.shields.io/github/license/MarcosBrendonDePaula/ApiForge?style=flat-square)](https://github.com/MarcosBrendonDePaula/ApiForge/blob/main/LICENSE.md)
 
 **Forge powerful APIs with advanced filtering, pagination, and field selection capabilities for Laravel applications.** Build sophisticated APIs with minimal configuration and maximum performance.
 
@@ -286,7 +286,7 @@ Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
 
 ## 🔒 Security Vulnerabilities
 
-Please review [our security policy](../../security/policy) on how to report security vulnerabilities.
+Please review [our security policy](https://github.com/MarcosBrendonDePaula/ApiForge/security/policy) on how to report security vulnerabilities.
 
 ## 📄 License
 
@@ -294,8 +294,8 @@ The MIT License (MIT). Please see [License File](LICENSE.md) for more informatio
 
 ## 🙏 Credits
 
-- [Marcos Brendon](https://github.com/marcosbrendon)
-- [All Contributors](../../contributors)
+- [Marcos Brendon](https://github.com/MarcosBrendonDePaula)
+- [All Contributors](https://github.com/MarcosBrendonDePaula/ApiForge/contributors)
 
 ## 💡 Why This Package?
 
@@ -312,4 +312,4 @@ This package was born from the need to create sophisticated APIs with advanced f
 
 ---
 
-Made with ❤️ by [Marcos Brendon](https://github.com/marcosbrendon)
+Made with ❤️ by [Marcos Brendon](https://github.com/MarcosBrendonDePaula)

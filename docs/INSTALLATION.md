@@ -11,7 +11,7 @@
 Install the package via Composer:
 
 ```bash
-composer require marcosbrendon/laravel-apiforge
+composer require marcosbrendon/apiforge
 ```
 
 ## Configuration
@@ -19,7 +19,7 @@ composer require marcosbrendon/laravel-apiforge
 ### 1. Publish Configuration (Optional)
 
 ```bash
-php artisan vendor:publish --provider="MarcosBrendon\LaravelAdvancedApiFilters\LaravelAdvancedApiFiltersServiceProvider" --tag="config"
+php artisan vendor:publish --provider="MarcosBrendon\ApiForge\ApiForgeServiceProvider" --tag="config"
 ```
 
 This will publish the configuration file to `config/apiforge.php`.
@@ -45,7 +45,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\User;
 use Illuminate\Http\Request;
-use MarcosBrendon\LaravelAdvancedApiFilters\Http\Controllers\BaseApiController;
+use MarcosBrendon\ApiForge\Http\Controllers\BaseApiController;
 
 class UserController extends BaseApiController
 {
@@ -110,7 +110,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\User;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
-use MarcosBrendon\LaravelAdvancedApiFilters\Traits\HasAdvancedFilters;
+use MarcosBrendon\ApiForge\Traits\HasAdvancedFilters;
 
 class UserController extends Controller
 {
@@ -209,6 +209,6 @@ This will log SQL queries and filter applications to help with debugging.
 
 ## Support
 
-- [GitHub Issues](https://github.com/marcosbrendon/laravel-apiforge/issues)
+- [GitHub Issues](https://github.com/MarcosBrendonDePaula/ApiForge/issues)
 - [Documentation](../README.md)
 - [Examples](../examples/)
