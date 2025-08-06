@@ -4,7 +4,7 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/marcosbrendon/apiforge.svg?style=flat-square)](https://packagist.org/packages/marcosbrendon/apiforge)
 [![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/MarcosBrendonDePaula/ApiForge/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/MarcosBrendonDePaula/ApiForge/actions)
 [![PHP Version Require](https://img.shields.io/packagist/php-v/marcosbrendon/apiforge?style=flat-square)](https://packagist.org/packages/marcosbrendon/apiforge)
-[![Laravel Version](https://img.shields.io/badge/Laravel-10%2B%20%7C%2011%2B-red?style=flat-square&logo=laravel)](https://laravel.com)
+[![Laravel Version](https://img.shields.io/badge/Laravel-10%2B%20%7C%2011%2B%20%7C%2012%2B-red?style=flat-square&logo=laravel)](https://laravel.com)
 [![GitHub License](https://img.shields.io/github/license/MarcosBrendonDePaula/ApiForge?style=flat-square)](https://github.com/MarcosBrendonDePaula/ApiForge/blob/main/LICENSE.md)
 
 **Forge powerful APIs with advanced filtering, pagination, and field selection capabilities for Laravel applications.** Build sophisticated APIs with minimal configuration and maximum performance.
@@ -285,7 +285,7 @@ ApiForge is production-ready with:
 - ✅ **11 comprehensive tests** covering all features
 - ✅ **Security** - Built-in SQL injection protection
 - ✅ **Performance** - Query optimization and caching
-- ✅ **Compatibility** - PHP 8.1+ and Laravel 10+
+- ✅ **Compatibility** - PHP 8.1+ and Laravel 10/11/12+
 - ✅ **CI/CD** - Automated testing with GitHub Actions
 - ✅ **Documentation** - Complete API documentation
 
