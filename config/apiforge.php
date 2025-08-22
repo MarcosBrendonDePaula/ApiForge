@@ -146,4 +146,95 @@ return [
         'log_filters' => false,
         'include_query_time' => false,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Documentation Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for AI-powered documentation generation.
+    |
+    */
+    'documentation' => [
+        'enabled' => true,
+        
+        'cache' => [
+            'enabled' => true,
+            'ttl' => 3600, // 1 hour
+            'key_prefix' => 'apiforge_docs_',
+        ],
+        
+        'llm' => [
+            'priority' => ['claude', 'openai', 'deepseek'], // Order of preference
+            
+            'providers' => [
+                'openai' => [
+                    'enabled' => env('APIFORGE_OPENAI_ENABLED', false),
+                    'api_key' => env('OPENAI_API_KEY'),
+                    'endpoint' => 'https://api.openai.com/v1/chat/completions',
+                    'model' => env('APIFORGE_OPENAI_MODEL', 'gpt-4o'),
+                    'temperature' => 0.1,
+                    'max_tokens' => 4000,
+                    'timeout' => 60,
+                ],
+                
+                'claude' => [
+                    'enabled' => env('APIFORGE_CLAUDE_ENABLED', false),
+                    'api_key' => env('CLAUDE_API_KEY'),
+                    'endpoint' => 'https://api.anthropic.com/v1/messages',
+                    'model' => env('APIFORGE_CLAUDE_MODEL', 'claude-3-sonnet-20240229'),
+                    'version' => '2023-06-01',
+                    'temperature' => 0.1,
+                    'max_tokens' => 4000,
+                    'timeout' => 60,
+                ],
+                
+                'deepseek' => [
+                    'enabled' => env('APIFORGE_DEEPSEEK_ENABLED', false),
+                    'api_key' => env('DEEPSEEK_API_KEY'),
+                    'endpoint' => 'https://api.deepseek.com/chat/completions',
+                    'model' => env('APIFORGE_DEEPSEEK_MODEL', 'deepseek-chat'),
+                    'temperature' => 0.1,
+                    'max_tokens' => 4000,
+                    'timeout' => 60,
+                ],
+            ],
+        ],
+        
+        'output' => [
+            'default_path' => storage_path('app/docs'),
+            'formats' => ['json', 'yaml', 'html'],
+            'default_format' => 'json',
+        ],
+        
+        'templates' => [
+            'openapi_version' => '3.0.0',
+            'info' => [
+                'contact' => [
+                    'name' => env('API_CONTACT_NAME', 'API Support'),
+                    'email' => env('API_CONTACT_EMAIL'),
+                    'url' => env('API_CONTACT_URL'),
+                ],
+                'license' => [
+                    'name' => env('API_LICENSE_NAME', 'MIT'),
+                    'url' => env('API_LICENSE_URL'),
+                ],
+            ],
+            'servers' => [
+                [
+                    'url' => env('APP_URL', 'http://localhost') . '/api',
+                    'description' => 'Main API Server',
+                ],
+            ],
+        ],
+        
+        'enhancement' => [
+            'include_examples' => true,
+            'include_error_responses' => true,
+            'detailed_descriptions' => true,
+            'parameter_validation' => true,
+            'response_schemas' => true,
+            'security_definitions' => true,
+        ],
+    ],
 ];

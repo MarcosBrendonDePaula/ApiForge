@@ -6,6 +6,8 @@ use Illuminate\Support\ServiceProvider;
 use MarcosBrendon\ApiForge\Http\Middleware\ApiPaginationMiddleware;
 use MarcosBrendon\ApiForge\Services\ApiFilterService;
 use MarcosBrendon\ApiForge\Services\FilterConfigService;
+use MarcosBrendon\ApiForge\Services\DocumentationGeneratorService;
+use MarcosBrendon\ApiForge\Console\Commands\GenerateDocumentationCommand;
 
 class ApiForgeServiceProvider extends ServiceProvider
 {
@@ -21,6 +23,13 @@ class ApiForgeServiceProvider extends ServiceProvider
 
         // Register middleware
         $this->app['router']->aliasMiddleware('apiforge', ApiPaginationMiddleware::class);
+
+        // Register commands
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                GenerateDocumentationCommand::class,
+            ]);
+        }
 
         // Publish migrations if needed
         if (! class_exists('CreateApiFilterCacheTable')) {
@@ -47,9 +56,14 @@ class ApiForgeServiceProvider extends ServiceProvider
             return new FilterConfigService();
         });
 
+        $this->app->singleton(DocumentationGeneratorService::class, function ($app) {
+            return new DocumentationGeneratorService($app->make(FilterConfigService::class));
+        });
+
         // Register aliases
         $this->app->alias(ApiFilterService::class, 'api-filter-service');
         $this->app->alias(FilterConfigService::class, 'filter-config-service');
+        $this->app->alias(DocumentationGeneratorService::class, 'documentation-generator-service');
     }
 
     /**
@@ -62,8 +76,10 @@ class ApiForgeServiceProvider extends ServiceProvider
         return [
             ApiFilterService::class,
             FilterConfigService::class,
+            DocumentationGeneratorService::class,
             'api-filter-service',
             'filter-config-service',
+            'documentation-generator-service',
         ];
     }
 }
