@@ -8,6 +8,7 @@ use MarcosBrendon\ApiForge\Exceptions\FilterValidationException;
 use MarcosBrendon\ApiForge\Support\VirtualFieldDefinition;
 use MarcosBrendon\ApiForge\Support\VirtualFieldProcessor;
 use MarcosBrendon\ApiForge\Support\VirtualFieldRegistry;
+use MarcosBrendon\ApiForge\Support\VirtualFieldMonitor;
 
 class VirtualFieldService
 {
@@ -386,6 +387,38 @@ class VirtualFieldService
             'log_operations' => $this->logOperations,
             'throw_on_failure' => $this->throwOnFailure
         ]);
+    }
+
+    /**
+     * Get detailed metrics for a specific virtual field
+     */
+    public function getFieldMetrics(string $field): array
+    {
+        return $this->processor->getFieldMetrics($field);
+    }
+
+    /**
+     * Clear all performance and monitoring data
+     */
+    public function clearMetrics(): void
+    {
+        $this->processor->clearMetrics();
+    }
+
+    /**
+     * Export metrics for persistence
+     */
+    public function exportMetrics(): void
+    {
+        $this->processor->exportMetrics();
+    }
+
+    /**
+     * Get the monitor instance for advanced monitoring operations
+     */
+    public function getMonitor(): VirtualFieldMonitor
+    {
+        return $this->processor->getMonitor();
     }
 
     /**

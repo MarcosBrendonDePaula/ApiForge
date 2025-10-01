@@ -288,6 +288,11 @@ return [
         'log_operations' => env('APIFORGE_LOG_VIRTUAL_FIELDS', false),
         'throw_on_failure' => true,
         
+        // Cache configuration
+        'cache_key_prefix' => 'vf_',
+        'cache_store' => null, // Use default cache store
+        'cache_tags' => ['virtual_fields'],
+        
         // Performance limits
         'memory_limit' => 128, // MB
         'time_limit' => 30, // seconds
@@ -299,5 +304,21 @@ return [
         'sort_fallback_enabled' => true, // Fall back to regular sorting if virtual field sorting fails
         'sort_cache_enabled' => true, // Cache sorted results
         'sort_cache_ttl' => 1800, // seconds
+        
+        // Performance monitoring
+        'enable_monitoring' => env('APIFORGE_VF_MONITORING', false),
+        'log_performance' => env('APIFORGE_VF_LOG_PERFORMANCE', false),
+        'log_slow_computations' => true,
+        'slow_computation_threshold' => 1000, // milliseconds
+        'track_memory_usage' => true,
+        'track_computation_time' => true,
+        
+        // Lazy loading
+        'lazy_loading_enabled' => env('APIFORGE_VF_LAZY_LOADING', true),
+        
+        // Batch processing optimization
+        'continue_on_batch_error' => false,
+        'strict_limits' => true,
+        'force_gc_frequency' => 10, // Force garbage collection every N batches
     ],
 ];

@@ -7,6 +7,9 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use MarcosBrendon\ApiForge\Exceptions\FilterValidationException;
+use MarcosBrendon\ApiForge\Support\VirtualFieldCache;
+use MarcosBrendon\ApiForge\Support\VirtualFieldPerformanceManager;
+use MarcosBrendon\ApiForge\Support\VirtualFieldMonitor;
 
 class VirtualFieldProcessor
 {
@@ -14,6 +17,21 @@ class VirtualFieldProcessor
      * The virtual field registry
      */
     protected VirtualFieldRegistry $registry;
+
+    /**
+     * The virtual field cache instance
+     */
+    protected VirtualFieldCache $cache;
+
+    /**
+     * The performance manager instance
+     */
+    protected VirtualFieldPerformanceManager $performanceManager;
+
+    /**
+     * The monitor instance
+     */
+    protected VirtualFieldMonitor $monitor;
 
     /**
      * Whether to use caching
@@ -41,6 +59,9 @@ class VirtualFieldProcessor
     public function __construct(VirtualFieldRegistry $registry)
     {
         $this->registry = $registry;
+        $this->cache = new VirtualFieldCache();
+        $this->performanceManager = new VirtualFieldPerformanceManager();
+        $this->monitor = new VirtualFieldMonitor();
         $this->cacheEnabled = config('apiforge.virtual_fields.cache_enabled', true);
         $this->defaultCacheTtl = config('apiforge.virtual_fields.default_cache_ttl', 3600);
         $this->memoryLimit = config('apiforge.virtual_fields.memory_limit', 128);
@@ -77,32 +98,31 @@ class VirtualFieldProcessor
             return $models;
         }
 
-        $startTime = microtime(true);
-        $startMemory = memory_get_usage(true);
-
-        try {
-            // Process each virtual field
-            foreach ($virtualFields as $fieldName) {
-                $definition = $this->registry->get($fieldName);
-                if (!$definition) {
-                    continue;
+        return $this->performanceManager->executeWithMonitoring(
+            'virtual_field_selection',
+            function() use ($models, $virtualFields) {
+                // Use batch processing for large datasets
+                if ($models->count() > config('apiforge.virtual_fields.batch_size', 100)) {
+                    return $this->processSelectionInBatches($models, $virtualFields);
                 }
 
-                $this->computeFieldForModels($models, $definition);
+                // Process each virtual field
+                foreach ($virtualFields as $fieldName) {
+                    $definition = $this->registry->get($fieldName);
+                    if (!$definition) {
+                        continue;
+                    }
 
-                // Check memory and time limits
-                $this->checkLimits($startTime, $startMemory);
-            }
+                    $this->computeFieldForModels($models, $definition);
+                }
 
-            return $models;
-        } catch (\Exception $e) {
-            Log::error("Virtual field processing failed", [
-                'fields' => $virtualFields,
-                'model_count' => $models->count(),
-                'error' => $e->getMessage()
-            ]);
-            throw $e;
-        }
+                return $models;
+            },
+            [
+                'virtual_fields' => $virtualFields,
+                'model_count' => $models->count()
+            ]
+        );
     }
 
     /**
@@ -353,34 +373,36 @@ class VirtualFieldProcessor
     {
         // Check cache first if enabled
         if ($this->cacheEnabled && $definition->cacheable) {
-            $cacheKey = $definition->getCacheKey($model);
-            $cached = Cache::get($cacheKey);
+            $cached = $this->cache->retrieve($definition->name, $model);
             if ($cached !== null) {
+                $this->monitor->trackCacheOperation('retrieve', $definition->name, true);
                 return $cached;
+            } else {
+                $this->monitor->trackCacheOperation('retrieve', $definition->name, false);
             }
         }
 
-        try {
-            $value = $definition->compute($model);
+        // Monitor the computation
+        return $this->monitor->monitorComputation(
+            $definition->name,
+            function() use ($model, $definition) {
+                $value = $definition->compute($model);
 
-            // Cache the result if enabled
-            if ($this->cacheEnabled && $definition->cacheable) {
-                $cacheKey = $definition->getCacheKey($model);
-                $ttl = $definition->cacheTtl > 0 ? $definition->cacheTtl : $this->defaultCacheTtl;
-                Cache::put($cacheKey, $value, $ttl);
-            }
+                // Cache the result if enabled
+                if ($this->cacheEnabled && $definition->cacheable) {
+                    $ttl = $definition->cacheTtl > 0 ? $definition->cacheTtl : $this->defaultCacheTtl;
+                    $this->cache->store($definition->name, $model, $value, $ttl);
+                    $this->monitor->trackCacheOperation('store', $definition->name);
+                }
 
-            return $value;
-        } catch (\Exception $e) {
-            Log::warning("Virtual field computation failed", [
-                'field' => $definition->name,
+                return $value;
+            },
+            [
                 'model_class' => get_class($model),
                 'model_id' => $model->getKey(),
-                'error' => $e->getMessage()
-            ]);
-
-            return $definition->defaultValue;
-        }
+                'cacheable' => $definition->cacheable
+            ]
+        );
     }
 
     /**
@@ -450,36 +472,61 @@ class VirtualFieldProcessor
      */
     public function computeBatch(array $fieldNames, Collection $models): array
     {
-        $results = [];
-        $startTime = microtime(true);
-        $startMemory = memory_get_usage(true);
-
-        try {
-            foreach ($fieldNames as $fieldName) {
-                $definition = $this->registry->get($fieldName);
-                if (!$definition) {
-                    continue;
-                }
-
-                $results[$fieldName] = [];
-                foreach ($models as $model) {
-                    $value = $this->computeFieldValue($model, $definition);
-                    $results[$fieldName][$model->getKey()] = $value;
-                }
-
-                // Check limits after each field
-                $this->checkLimits($startTime, $startMemory);
-            }
-
-            return $results;
-        } catch (\Exception $e) {
-            Log::error("Batch virtual field computation failed", [
-                'fields' => $fieldNames,
-                'model_count' => $models->count(),
-                'error' => $e->getMessage()
-            ]);
-            throw $e;
+        if ($models->isEmpty() || empty($fieldNames)) {
+            return [];
         }
+
+        return $this->monitor->monitorBatch(
+            'compute',
+            $fieldNames,
+            $models->count(),
+            function() use ($fieldNames, $models) {
+                return $this->performanceManager->executeWithMonitoring(
+                    'virtual_field_batch_compute',
+                    function() use ($fieldNames, $models) {
+                        $results = [];
+
+                        // Track memory usage at start
+                        $this->monitor->trackMemoryUsage('batch_compute_start', [
+                            'field_count' => count($fieldNames),
+                            'model_count' => $models->count()
+                        ]);
+
+                        // Use batch processing for large datasets
+                        if ($models->count() > config('apiforge.virtual_fields.batch_size', 100)) {
+                            $results = $this->computeBatchInChunks($fieldNames, $models);
+                        } else {
+                            // Process each field
+                            foreach ($fieldNames as $fieldName) {
+                                $definition = $this->registry->get($fieldName);
+                                if (!$definition) {
+                                    continue;
+                                }
+
+                                $results[$fieldName] = [];
+                                foreach ($models as $model) {
+                                    $value = $this->computeFieldValue($model, $definition);
+                                    $results[$fieldName][$model->getKey()] = $value;
+                                }
+                            }
+                        }
+
+                        // Track memory usage at end
+                        $this->monitor->trackMemoryUsage('batch_compute_end', [
+                            'field_count' => count($fieldNames),
+                            'model_count' => $models->count(),
+                            'results_size' => count($results)
+                        ]);
+
+                        return $results;
+                    },
+                    [
+                        'field_names' => $fieldNames,
+                        'model_count' => $models->count()
+                    ]
+                );
+            }
+        );
     }
 
     /**
@@ -493,12 +540,17 @@ class VirtualFieldProcessor
 
         $fieldsToInvalidate = empty($fieldNames) ? $this->registry->getFieldNames() : $fieldNames;
 
+        if (empty($fieldNames)) {
+            // Invalidate all virtual fields for the model
+            $this->cache->invalidateModel($model);
+        } else {
+            // Invalidate specific fields
+            $this->cache->invalidateModel($model, $fieldNames);
+        }
+
+        // Track cache invalidation operations
         foreach ($fieldsToInvalidate as $fieldName) {
-            $definition = $this->registry->get($fieldName);
-            if ($definition && $definition->cacheable) {
-                $cacheKey = $definition->getCacheKey($model);
-                Cache::forget($cacheKey);
-            }
+            $this->monitor->trackCacheOperation('invalidate', $fieldName);
         }
     }
 
@@ -507,19 +559,42 @@ class VirtualFieldProcessor
      */
     public function warmUpCache(Collection $models, array $fieldNames = []): void
     {
-        if (!$this->cacheEnabled) {
+        if (!$this->cacheEnabled || $models->isEmpty()) {
             return;
         }
 
         $fieldsToWarm = empty($fieldNames) ? $this->registry->getFieldNames() : $fieldNames;
+        $cacheEntries = [];
 
         foreach ($fieldsToWarm as $fieldName) {
             $definition = $this->registry->get($fieldName);
             if ($definition && $definition->cacheable) {
                 foreach ($models as $model) {
-                    $this->computeFieldValue($model, $definition);
+                    try {
+                        $value = $definition->compute($model);
+                        $ttl = $definition->cacheTtl > 0 ? $definition->cacheTtl : $this->defaultCacheTtl;
+                        
+                        $cacheEntries[] = [
+                            'field' => $fieldName,
+                            'model' => $model,
+                            'value' => $value,
+                            'ttl' => $ttl
+                        ];
+                    } catch (\Exception $e) {
+                        Log::warning("Failed to warm up cache for virtual field", [
+                            'field' => $fieldName,
+                            'model_class' => get_class($model),
+                            'model_id' => $model->getKey(),
+                            'error' => $e->getMessage()
+                        ]);
+                    }
                 }
             }
+        }
+
+        // Batch store cache entries
+        if (!empty($cacheEntries)) {
+            $this->cache->storeBatch($cacheEntries);
         }
     }
 
@@ -528,6 +603,10 @@ class VirtualFieldProcessor
      */
     public function getStatistics(): array
     {
+        $cacheStats = $this->cache->getStatistics();
+        $performanceStats = $this->performanceManager->getPerformanceStatistics();
+        $monitorStats = $this->monitor->getStatistics();
+        
         return [
             'cache_enabled' => $this->cacheEnabled,
             'default_cache_ttl' => $this->defaultCacheTtl,
@@ -536,7 +615,150 @@ class VirtualFieldProcessor
             'registered_fields' => $this->registry->count(),
             'cacheable_fields' => count($this->registry->getCacheable()),
             'sortable_fields' => count($this->registry->getSortable()),
-            'searchable_fields' => count($this->registry->getSearchable())
+            'searchable_fields' => count($this->registry->getSearchable()),
+            'cache_statistics' => $cacheStats,
+            'performance_statistics' => $performanceStats,
+            'monitoring_statistics' => $monitorStats
         ];
+    }
+
+    /**
+     * Process virtual field selection in batches
+     */
+    protected function processSelectionInBatches(Collection $models, array $virtualFields): Collection
+    {
+        $this->performanceManager->processBatches(
+            $models,
+            function($batch) use ($virtualFields) {
+                foreach ($virtualFields as $fieldName) {
+                    $definition = $this->registry->get($fieldName);
+                    if ($definition) {
+                        $this->computeFieldForModels($batch, $definition);
+                    }
+                }
+                return $batch;
+            },
+            [
+                'continue_on_error' => config('apiforge.virtual_fields.continue_on_batch_error', false),
+                'strict_limits' => config('apiforge.virtual_fields.strict_limits', true)
+            ]
+        );
+
+        return $models;
+    }
+
+    /**
+     * Get the cache instance
+     */
+    public function getCache(): VirtualFieldCache
+    {
+        return $this->cache;
+    }
+
+    /**
+     * Compute batch in chunks for large datasets
+     */
+    protected function computeBatchInChunks(array $fieldNames, Collection $models): array
+    {
+        $results = [];
+        
+        // Initialize results structure
+        foreach ($fieldNames as $fieldName) {
+            $results[$fieldName] = [];
+        }
+
+        $batchResults = $this->performanceManager->processBatches(
+            $models,
+            function($batch) use ($fieldNames) {
+                $batchResults = [];
+                
+                foreach ($fieldNames as $fieldName) {
+                    $definition = $this->registry->get($fieldName);
+                    if (!$definition) {
+                        continue;
+                    }
+
+                    $batchResults[$fieldName] = [];
+                    foreach ($batch as $model) {
+                        $value = $this->computeFieldValue($model, $definition);
+                        $batchResults[$fieldName][$model->getKey()] = $value;
+                    }
+                }
+                
+                return $batchResults;
+            },
+            [
+                'continue_on_error' => config('apiforge.virtual_fields.continue_on_batch_error', false),
+                'strict_limits' => config('apiforge.virtual_fields.strict_limits', true)
+            ]
+        );
+
+        // Merge batch results
+        foreach ($batchResults as $batchResult) {
+            foreach ($fieldNames as $fieldName) {
+                if (isset($batchResult[$fieldName])) {
+                    $results[$fieldName] = array_merge($results[$fieldName], $batchResult[$fieldName]);
+                }
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Create lazy loader for virtual fields
+     */
+    public function createLazyLoader(Collection $models, array $virtualFields): \Closure
+    {
+        return $this->performanceManager->lazyLoadVirtualFields($models, $virtualFields, $this->registry);
+    }
+
+    /**
+     * Process virtual field sorting with performance optimization
+     */
+    public function processOptimizedSorting(Collection $models, string $virtualField, string $direction): Collection
+    {
+        return $this->performanceManager->optimizeSorting($models, $virtualField, $direction, $this->registry);
+    }
+
+    /**
+     * Get the performance manager instance
+     */
+    public function getPerformanceManager(): VirtualFieldPerformanceManager
+    {
+        return $this->performanceManager;
+    }
+
+    /**
+     * Get the monitor instance
+     */
+    public function getMonitor(): VirtualFieldMonitor
+    {
+        return $this->monitor;
+    }
+
+    /**
+     * Get detailed metrics for a specific virtual field
+     */
+    public function getFieldMetrics(string $fieldName): array
+    {
+        return $this->monitor->getFieldMetrics($fieldName);
+    }
+
+    /**
+     * Clear all performance and monitoring data
+     */
+    public function clearMetrics(): void
+    {
+        $this->monitor->clearMetrics();
+        $this->performanceManager->clearPerformanceData();
+    }
+
+    /**
+     * Export metrics for persistence
+     */
+    public function exportMetrics(): void
+    {
+        $this->monitor->exportMetrics();
     }
 }
