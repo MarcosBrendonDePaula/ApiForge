@@ -203,6 +203,185 @@ class ModelHookService
     }
 
     /**
+     * Execute beforeValidation hooks
+     */
+    public function executeBeforeValidation($model, Request $request, array $data = []): array
+    {
+        $result = $this->execute('beforeValidation', $model, $request, $data);
+        
+        // If hooks return modified data, use it
+        if (is_array($result) && !empty($result)) {
+            return array_merge($data, $result);
+        }
+        
+        return $data;
+    }
+
+    /**
+     * Execute afterValidation hooks
+     */
+    public function executeAfterValidation($model, Request $request, array $validatedData = []): void
+    {
+        $this->execute('afterValidation', $model, $request, $validatedData);
+    }
+
+    /**
+     * Execute beforeTransform hooks
+     */
+    public function executeBeforeTransform($model, Request $request, array $data = []): array
+    {
+        $result = $this->execute('beforeTransform', $model, $request, $data);
+        
+        // If hooks return modified data, use it
+        if (is_array($result) && !empty($result)) {
+            return array_merge($data, $result);
+        }
+        
+        return $data;
+    }
+
+    /**
+     * Execute afterTransform hooks
+     */
+    public function executeAfterTransform($model, Request $request, array $transformedData = []): void
+    {
+        $this->execute('afterTransform', $model, $request, $transformedData);
+    }
+
+    /**
+     * Execute beforeAuthorization hooks
+     */
+    public function executeBeforeAuthorization($model, Request $request, string $action = ''): bool
+    {
+        $result = $this->execute('beforeAuthorization', $model, $request, ['action' => $action]);
+        
+        // If any hook returns false, deny authorization
+        if (is_array($result)) {
+            foreach ($result as $hookResult) {
+                if ($hookResult === false) {
+                    return false;
+                }
+            }
+        } elseif ($result === false) {
+            return false;
+        }
+        
+        return true;
+    }
+
+    /**
+     * Execute afterAuthorization hooks
+     */
+    public function executeAfterAuthorization($model, Request $request, bool $authorized, string $action = ''): void
+    {
+        $this->execute('afterAuthorization', $model, $request, [
+            'action' => $action,
+            'authorized' => $authorized
+        ]);
+    }
+
+    /**
+     * Execute beforeAudit hooks
+     */
+    public function executeBeforeAudit($model, Request $request, array $changes = []): void
+    {
+        $this->execute('beforeAudit', $model, $request, ['changes' => $changes]);
+    }
+
+    /**
+     * Execute afterAudit hooks
+     */
+    public function executeAfterAudit($model, Request $request, array $auditData = []): void
+    {
+        $this->execute('afterAudit', $model, $request, $auditData);
+    }
+
+    /**
+     * Execute beforeNotification hooks
+     */
+    public function executeBeforeNotification($model, Request $request, array $notificationData = []): array
+    {
+        $result = $this->execute('beforeNotification', $model, $request, $notificationData);
+        
+        // If hooks return modified notification data, use it
+        if (is_array($result) && !empty($result)) {
+            return array_merge($notificationData, $result);
+        }
+        
+        return $notificationData;
+    }
+
+    /**
+     * Execute afterNotification hooks
+     */
+    public function executeAfterNotification($model, Request $request, array $notificationResult = []): void
+    {
+        $this->execute('afterNotification', $model, $request, $notificationResult);
+    }
+
+    /**
+     * Execute beforeCache hooks
+     */
+    public function executeBeforeCache($model, Request $request, array $cacheData = []): array
+    {
+        $result = $this->execute('beforeCache', $model, $request, $cacheData);
+        
+        // If hooks return modified cache data, use it
+        if (is_array($result) && !empty($result)) {
+            return array_merge($cacheData, $result);
+        }
+        
+        return $cacheData;
+    }
+
+    /**
+     * Execute afterCache hooks
+     */
+    public function executeAfterCache($model, Request $request, array $cacheResult = []): void
+    {
+        $this->execute('afterCache', $model, $request, $cacheResult);
+    }
+
+    /**
+     * Execute beforeQuery hooks (for filtering and searching)
+     */
+    public function executeBeforeQuery($model, Request $request, $query): void
+    {
+        $this->execute('beforeQuery', $model, $request, ['query' => $query]);
+    }
+
+    /**
+     * Execute afterQuery hooks
+     */
+    public function executeAfterQuery($model, Request $request, $results): void
+    {
+        $this->execute('afterQuery', $model, $request, ['results' => $results]);
+    }
+
+    /**
+     * Execute beforeResponse hooks
+     */
+    public function executeBeforeResponse($model, Request $request, array $responseData = []): array
+    {
+        $result = $this->execute('beforeResponse', $model, $request, $responseData);
+        
+        // If hooks return modified response data, use it
+        if (is_array($result) && !empty($result)) {
+            return array_merge($responseData, $result);
+        }
+        
+        return $responseData;
+    }
+
+    /**
+     * Execute afterResponse hooks
+     */
+    public function executeAfterResponse($model, Request $request, array $responseData = []): void
+    {
+        $this->execute('afterResponse', $model, $request, $responseData);
+    }
+
+    /**
      * Register hooks from configuration array
      */
     public function registerFromConfig(array $config): void

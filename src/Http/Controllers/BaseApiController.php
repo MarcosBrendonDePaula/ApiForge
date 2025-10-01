@@ -24,7 +24,73 @@ abstract class BaseApiController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        return $this->indexWithFilters($request);
+        $this->initializeFilterServices();
+        
+        $modelClass = $this->getModelClass();
+        $tempModel = new $modelClass();
+
+        try {
+            // Executar hooks beforeAuthorization
+            if ($this->hookService && $this->hookService->hasHook('beforeAuthorization')) {
+                $authorized = $this->hookService->executeBeforeAuthorization($tempModel, $request, 'index');
+                if (!$authorized) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Não autorizado para listar estes recursos'
+                    ], 403);
+                }
+            }
+
+            // Executar hooks beforeQuery
+            if ($this->hookService && $this->hookService->hasHook('beforeQuery')) {
+                $this->hookService->executeBeforeQuery($tempModel, $request, null);
+            }
+
+            // Executar hooks beforeCache
+            $cacheData = [];
+            if ($this->hookService && $this->hookService->hasHook('beforeCache')) {
+                $cacheData = $this->hookService->executeBeforeCache($tempModel, $request, [
+                    'query_params' => $request->all()
+                ]);
+            }
+
+            $result = $this->indexWithFilters($request);
+            $responseData = json_decode($result->getContent(), true);
+
+            // Executar hooks afterQuery
+            if ($this->hookService && $this->hookService->hasHook('afterQuery')) {
+                $this->hookService->executeAfterQuery($tempModel, $request, $responseData);
+            }
+
+            // Executar hooks afterCache
+            if ($this->hookService && $this->hookService->hasHook('afterCache')) {
+                $this->hookService->executeAfterCache($tempModel, $request, [
+                    'cached' => !empty($cacheData),
+                    'result_count' => isset($responseData['data']) ? count($responseData['data']) : 0
+                ]);
+            }
+
+            // Executar hooks beforeResponse
+            if ($this->hookService && $this->hookService->hasHook('beforeResponse')) {
+                $responseData = $this->hookService->executeBeforeResponse($tempModel, $request, $responseData);
+            }
+
+            // Executar hooks afterResponse
+            if ($this->hookService && $this->hookService->hasHook('afterResponse')) {
+                $this->hookService->executeAfterResponse($tempModel, $request, $responseData);
+            }
+
+            return response()->json($responseData, $result->getStatusCode());
+
+        } catch (\Exception $e) {
+            Log::error('Error in index method with hooks', [
+                'exception' => $e->getMessage(),
+                'model_class' => $modelClass
+            ]);
+
+            // Fallback to original method if hooks fail
+            return $this->indexWithFilters($request);
+        }
     }
 
     /**
@@ -39,29 +105,96 @@ abstract class BaseApiController extends Controller
         $this->initializeFilterServices();
 
         $modelClass = $this->getModelClass();
-        $query = $modelClass::query();
-
-        // Aplicar relacionamentos padrão
-        if (method_exists($this, 'getDefaultRelationships')) {
-            $relationships = $this->getDefaultRelationships();
-            if (!empty($relationships)) {
-                $query->with($relationships);
+        
+        try {
+            // Executar hooks beforeAuthorization
+            $tempModel = new $modelClass();
+            if ($this->hookService && $this->hookService->hasHook('beforeAuthorization')) {
+                $authorized = $this->hookService->executeBeforeAuthorization($tempModel, $request, 'show');
+                if (!$authorized) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Não autorizado para visualizar este recurso'
+                    ], 403);
+                }
             }
+
+            $query = $modelClass::query();
+
+            // Executar hooks beforeQuery
+            if ($this->hookService && $this->hookService->hasHook('beforeQuery')) {
+                $this->hookService->executeBeforeQuery($tempModel, $request, $query);
+            }
+
+            // Aplicar relacionamentos padrão
+            if (method_exists($this, 'getDefaultRelationships')) {
+                $relationships = $this->getDefaultRelationships();
+                if (!empty($relationships)) {
+                    $query->with($relationships);
+                }
+            }
+
+            // Aplicar field selection se solicitado
+            $this->applyFieldSelection($query, $request);
+
+            $resource = $query->findOrFail($id);
+
+            // Executar hooks afterQuery
+            if ($this->hookService && $this->hookService->hasHook('afterQuery')) {
+                $this->hookService->executeAfterQuery($resource, $request, $resource);
+            }
+
+            // Preparar dados de resposta
+            $responseData = [
+                'success' => true,
+                'data' => $resource,
+                'metadata' => [
+                    'timestamp' => now()->format('c'),
+                    'api_version' => 'v2'
+                ]
+            ];
+
+            // Executar hooks beforeResponse
+            if ($this->hookService && $this->hookService->hasHook('beforeResponse')) {
+                $responseData = $this->hookService->executeBeforeResponse($resource, $request, $responseData);
+            }
+
+            // Executar hooks afterResponse
+            if ($this->hookService && $this->hookService->hasHook('afterResponse')) {
+                $this->hookService->executeAfterResponse($resource, $request, $responseData);
+            }
+
+            return response()->json($responseData);
+
+        } catch (\Exception $e) {
+            Log::error('Error in show method with hooks', [
+                'exception' => $e->getMessage(),
+                'model_class' => $modelClass,
+                'model_id' => $id
+            ]);
+
+            // Fallback to original logic if hooks fail
+            $query = $modelClass::query();
+            
+            if (method_exists($this, 'getDefaultRelationships')) {
+                $relationships = $this->getDefaultRelationships();
+                if (!empty($relationships)) {
+                    $query->with($relationships);
+                }
+            }
+
+            $this->applyFieldSelection($query, $request);
+            $resource = $query->findOrFail($id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $resource,
+                'metadata' => [
+                    'timestamp' => now()->format('c'),
+                    'api_version' => 'v2'
+                ]
+            ]);
         }
-
-        // Aplicar field selection se solicitado
-        $this->applyFieldSelection($query, $request);
-
-        $resource = $query->findOrFail($id);
-
-        return response()->json([
-            'success' => true,
-            'data' => $resource,
-            'metadata' => [
-                'timestamp' => now()->format('c'),
-                'api_version' => 'v2'
-            ]
-        ]);
     }
 
     /**
@@ -74,18 +207,51 @@ abstract class BaseApiController extends Controller
     {
         $this->initializeFilterServices();
 
-        // Validar dados
-        $validatedData = $this->validateStoreData($request);
-
-        // Aplicar transformações se necessário
-        if (method_exists($this, 'transformStoreData')) {
-            $validatedData = $this->transformStoreData($validatedData, $request);
-        }
-
         $modelClass = $this->getModelClass();
-        
+        $tempModel = new $modelClass();
+
         try {
             DB::beginTransaction();
+
+            // Executar hooks beforeAuthorization
+            if ($this->hookService && $this->hookService->hasHook('beforeAuthorization')) {
+                $authorized = $this->hookService->executeBeforeAuthorization($tempModel, $request, 'store');
+                if (!$authorized) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Não autorizado para criar este recurso'
+                    ], 403);
+                }
+            }
+
+            // Executar hooks beforeValidation
+            $requestData = $request->all();
+            if ($this->hookService && $this->hookService->hasHook('beforeValidation')) {
+                $requestData = $this->hookService->executeBeforeValidation($tempModel, $request, $requestData);
+            }
+
+            // Validar dados
+            $validatedData = $this->validateStoreData($request);
+
+            // Executar hooks afterValidation
+            if ($this->hookService && $this->hookService->hasHook('afterValidation')) {
+                $this->hookService->executeAfterValidation($tempModel, $request, $validatedData);
+            }
+
+            // Executar hooks beforeTransform
+            if ($this->hookService && $this->hookService->hasHook('beforeTransform')) {
+                $validatedData = $this->hookService->executeBeforeTransform($tempModel, $request, $validatedData);
+            }
+
+            // Aplicar transformações se necessário
+            if (method_exists($this, 'transformStoreData')) {
+                $validatedData = $this->transformStoreData($validatedData, $request);
+            }
+
+            // Executar hooks afterTransform
+            if ($this->hookService && $this->hookService->hasHook('afterTransform')) {
+                $this->hookService->executeAfterTransform($tempModel, $request, $validatedData);
+            }
 
             // Criar instância temporária do modelo para hooks beforeStore
             $resource = new $modelClass($validatedData);
@@ -98,9 +264,23 @@ abstract class BaseApiController extends Controller
             // Criar o recurso no banco de dados
             $resource = $modelClass::create($validatedData);
 
+            // Executar hooks beforeAudit
+            if ($this->hookService && $this->hookService->hasHook('beforeAudit')) {
+                $this->hookService->executeBeforeAudit($resource, $request, $validatedData);
+            }
+
             // Executar hooks afterStore
             if ($this->hookService && $this->hookService->hasHook('afterStore')) {
                 $this->hookService->executeAfterStore($resource, $request);
+            }
+
+            // Executar hooks afterAudit
+            if ($this->hookService && $this->hookService->hasHook('afterAudit')) {
+                $this->hookService->executeAfterAudit($resource, $request, [
+                    'action' => 'store',
+                    'model_id' => $resource->getKey(),
+                    'data' => $validatedData
+                ]);
             }
 
             // Carregar relacionamentos se necessário
@@ -111,13 +291,37 @@ abstract class BaseApiController extends Controller
                 }
             }
 
-            DB::commit();
-
-            return response()->json([
+            // Preparar dados de resposta
+            $responseData = [
                 'success' => true,
                 'data' => $resource,
                 'message' => 'Recurso criado com sucesso'
-            ], 201);
+            ];
+
+            // Executar hooks beforeResponse
+            if ($this->hookService && $this->hookService->hasHook('beforeResponse')) {
+                $responseData = $this->hookService->executeBeforeResponse($resource, $request, $responseData);
+            }
+
+            // Executar hooks beforeNotification
+            if ($this->hookService && $this->hookService->hasHook('beforeNotification')) {
+                $notificationData = $this->hookService->executeBeforeNotification($resource, $request, [
+                    'action' => 'created',
+                    'model' => $resource
+                ]);
+                
+                // Aqui você pode implementar o envio de notificações
+                // NotificationService::send($notificationData);
+            }
+
+            DB::commit();
+
+            // Executar hooks afterResponse
+            if ($this->hookService && $this->hookService->hasHook('afterResponse')) {
+                $this->hookService->executeAfterResponse($resource, $request, $responseData);
+            }
+
+            return response()->json($responseData, 201);
 
         } catch (\Exception $e) {
             DB::rollBack();
@@ -126,7 +330,7 @@ abstract class BaseApiController extends Controller
             Log::error('Error creating resource in store method', [
                 'exception' => $e->getMessage(),
                 'model_class' => $modelClass,
-                'data' => $validatedData
+                'data' => $validatedData ?? $request->all()
             ]);
 
             return response()->json([
@@ -150,16 +354,48 @@ abstract class BaseApiController extends Controller
         $modelClass = $this->getModelClass();
         $resource = $modelClass::findOrFail($id);
 
-        // Validar dados
-        $validatedData = $this->validateUpdateData($request, $resource);
-
-        // Aplicar transformações se necessário
-        if (method_exists($this, 'transformUpdateData')) {
-            $validatedData = $this->transformUpdateData($validatedData, $request, $resource);
-        }
-
         try {
             DB::beginTransaction();
+
+            // Executar hooks beforeAuthorization
+            if ($this->hookService && $this->hookService->hasHook('beforeAuthorization')) {
+                $authorized = $this->hookService->executeBeforeAuthorization($resource, $request, 'update');
+                if (!$authorized) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Não autorizado para atualizar este recurso'
+                    ], 403);
+                }
+            }
+
+            // Executar hooks beforeValidation
+            $requestData = $request->all();
+            if ($this->hookService && $this->hookService->hasHook('beforeValidation')) {
+                $requestData = $this->hookService->executeBeforeValidation($resource, $request, $requestData);
+            }
+
+            // Validar dados
+            $validatedData = $this->validateUpdateData($request, $resource);
+
+            // Executar hooks afterValidation
+            if ($this->hookService && $this->hookService->hasHook('afterValidation')) {
+                $this->hookService->executeAfterValidation($resource, $request, $validatedData);
+            }
+
+            // Executar hooks beforeTransform
+            if ($this->hookService && $this->hookService->hasHook('beforeTransform')) {
+                $validatedData = $this->hookService->executeBeforeTransform($resource, $request, $validatedData);
+            }
+
+            // Aplicar transformações se necessário
+            if (method_exists($this, 'transformUpdateData')) {
+                $validatedData = $this->transformUpdateData($validatedData, $request, $resource);
+            }
+
+            // Executar hooks afterTransform
+            if ($this->hookService && $this->hookService->hasHook('afterTransform')) {
+                $this->hookService->executeAfterTransform($resource, $request, $validatedData);
+            }
 
             // Capturar dados originais para o contexto
             $originalData = $resource->getOriginal();
@@ -172,6 +408,12 @@ abstract class BaseApiController extends Controller
                     'changes' => array_diff_assoc($validatedData, $originalData)
                 ];
                 $this->hookService->executeBeforeUpdate($resource, $request, $hookData);
+            }
+
+            // Executar hooks beforeAudit
+            if ($this->hookService && $this->hookService->hasHook('beforeAudit')) {
+                $changes = array_diff_assoc($validatedData, $originalData);
+                $this->hookService->executeBeforeAudit($resource, $request, $changes);
             }
 
             // Atualizar o recurso
@@ -187,6 +429,16 @@ abstract class BaseApiController extends Controller
                 $this->hookService->executeAfterUpdate($resource, $request, $hookData);
             }
 
+            // Executar hooks afterAudit
+            if ($this->hookService && $this->hookService->hasHook('afterAudit')) {
+                $this->hookService->executeAfterAudit($resource, $request, [
+                    'action' => 'update',
+                    'model_id' => $resource->getKey(),
+                    'original' => $originalData,
+                    'changes' => $resource->getChanges()
+                ]);
+            }
+
             // Carregar relacionamentos se necessário
             if (method_exists($this, 'getDefaultRelationships')) {
                 $relationships = $this->getDefaultRelationships();
@@ -195,13 +447,38 @@ abstract class BaseApiController extends Controller
                 }
             }
 
-            DB::commit();
-
-            return response()->json([
+            // Preparar dados de resposta
+            $responseData = [
                 'success' => true,
                 'data' => $resource,
                 'message' => 'Recurso atualizado com sucesso'
-            ]);
+            ];
+
+            // Executar hooks beforeResponse
+            if ($this->hookService && $this->hookService->hasHook('beforeResponse')) {
+                $responseData = $this->hookService->executeBeforeResponse($resource, $request, $responseData);
+            }
+
+            // Executar hooks beforeNotification
+            if ($this->hookService && $this->hookService->hasHook('beforeNotification')) {
+                $notificationData = $this->hookService->executeBeforeNotification($resource, $request, [
+                    'action' => 'updated',
+                    'model' => $resource,
+                    'changes' => $resource->getChanges()
+                ]);
+                
+                // Aqui você pode implementar o envio de notificações
+                // NotificationService::send($notificationData);
+            }
+
+            DB::commit();
+
+            // Executar hooks afterResponse
+            if ($this->hookService && $this->hookService->hasHook('afterResponse')) {
+                $this->hookService->executeAfterResponse($resource, $request, $responseData);
+            }
+
+            return response()->json($responseData);
 
         } catch (\Exception $e) {
             DB::rollBack();
@@ -211,7 +488,7 @@ abstract class BaseApiController extends Controller
                 'exception' => $e->getMessage(),
                 'model_class' => $modelClass,
                 'model_id' => $id,
-                'data' => $validatedData
+                'data' => $validatedData ?? $request->all()
             ]);
 
             return response()->json([
@@ -235,19 +512,30 @@ abstract class BaseApiController extends Controller
         $modelClass = $this->getModelClass();
         $resource = $modelClass::findOrFail($id);
 
-        // Verificar se pode ser deletado
-        if (method_exists($this, 'canDelete')) {
-            $canDelete = $this->canDelete($resource, $request);
-            if (!$canDelete) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Este recurso não pode ser removido'
-                ], 422);
-            }
-        }
-
         try {
             DB::beginTransaction();
+
+            // Executar hooks beforeAuthorization
+            if ($this->hookService && $this->hookService->hasHook('beforeAuthorization')) {
+                $authorized = $this->hookService->executeBeforeAuthorization($resource, $request, 'delete');
+                if (!$authorized) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Não autorizado para remover este recurso'
+                    ], 403);
+                }
+            }
+
+            // Verificar se pode ser deletado
+            if (method_exists($this, 'canDelete')) {
+                $canDelete = $this->canDelete($resource, $request);
+                if (!$canDelete) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Este recurso não pode ser removido'
+                    ], 422);
+                }
+            }
 
             // Executar hooks beforeDelete
             if ($this->hookService && $this->hookService->hasHook('beforeDelete')) {
@@ -259,6 +547,14 @@ abstract class BaseApiController extends Controller
                         'message' => 'A remoção foi impedida por regras de negócio'
                     ], 422);
                 }
+            }
+
+            // Executar hooks beforeAudit
+            if ($this->hookService && $this->hookService->hasHook('beforeAudit')) {
+                $this->hookService->executeBeforeAudit($resource, $request, [
+                    'action' => 'delete',
+                    'resource_data' => $resource->toArray()
+                ]);
             }
 
             // Capturar dados do recurso antes da exclusão para hooks afterDelete
@@ -277,12 +573,45 @@ abstract class BaseApiController extends Controller
                 $this->hookService->executeAfterDelete($deletedResource, $request);
             }
 
-            DB::commit();
+            // Executar hooks afterAudit
+            if ($this->hookService && $this->hookService->hasHook('afterAudit')) {
+                $this->hookService->executeAfterAudit($resource, $request, [
+                    'action' => 'delete',
+                    'model_id' => $id,
+                    'deleted_data' => $resourceData
+                ]);
+            }
 
-            return response()->json([
+            // Preparar dados de resposta
+            $responseData = [
                 'success' => true,
                 'message' => 'Recurso removido com sucesso'
-            ]);
+            ];
+
+            // Executar hooks beforeResponse
+            if ($this->hookService && $this->hookService->hasHook('beforeResponse')) {
+                $responseData = $this->hookService->executeBeforeResponse($resource, $request, $responseData);
+            }
+
+            // Executar hooks beforeNotification
+            if ($this->hookService && $this->hookService->hasHook('beforeNotification')) {
+                $notificationData = $this->hookService->executeBeforeNotification($resource, $request, [
+                    'action' => 'deleted',
+                    'model_data' => $resourceData
+                ]);
+                
+                // Aqui você pode implementar o envio de notificações
+                // NotificationService::send($notificationData);
+            }
+
+            DB::commit();
+
+            // Executar hooks afterResponse
+            if ($this->hookService && $this->hookService->hasHook('afterResponse')) {
+                $this->hookService->executeAfterResponse($resource, $request, $responseData);
+            }
+
+            return response()->json($responseData);
 
         } catch (\Exception $e) {
             DB::rollBack();
@@ -469,5 +798,75 @@ abstract class BaseApiController extends Controller
     protected function getQuickSearchFields(): array
     {
         return ['id'];
+    }
+
+    /**
+     * Configurar hooks do modelo
+     *
+     * @param array $hooks
+     * @return void
+     */
+    protected function configureModelHooks(array $hooks): void
+    {
+        if (!$this->hookService) {
+            return;
+        }
+
+        foreach ($hooks as $hookType => $hookDefinitions) {
+            if (is_array($hookDefinitions)) {
+                foreach ($hookDefinitions as $hookName => $hookConfig) {
+                    if (is_callable($hookConfig)) {
+                        // Hook simples com apenas callback
+                        $this->hookService->register($hookType, $hookName, $hookConfig);
+                    } elseif (is_array($hookConfig) && isset($hookConfig['callback'])) {
+                        // Hook com configurações avançadas
+                        $options = [
+                            'priority' => $hookConfig['priority'] ?? 10,
+                            'stopOnFailure' => $hookConfig['stopOnFailure'] ?? false,
+                            'conditions' => $hookConfig['conditions'] ?? [],
+                            'description' => $hookConfig['description'] ?? ''
+                        ];
+                        $this->hookService->register($hookType, $hookName, $hookConfig['callback'], $options);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Registrar um hook específico
+     *
+     * @param string $hookType
+     * @param string $hookName
+     * @param callable $callback
+     * @param array $options
+     * @return void
+     */
+    protected function registerHook(string $hookType, string $hookName, callable $callback, array $options = []): void
+    {
+        if ($this->hookService) {
+            $this->hookService->register($hookType, $hookName, $callback, $options);
+        }
+    }
+
+    /**
+     * Verificar se um hook existe
+     *
+     * @param string $hookType
+     * @return bool
+     */
+    protected function hasHook(string $hookType): bool
+    {
+        return $this->hookService && $this->hookService->hasHook($hookType);
+    }
+
+    /**
+     * Obter todos os hooks registrados
+     *
+     * @return array
+     */
+    protected function getRegisteredHooks(): array
+    {
+        return $this->hookService ? $this->hookService->getHooks() : [];
     }
 }
