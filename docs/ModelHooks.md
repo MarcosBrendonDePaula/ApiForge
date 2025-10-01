@@ -459,6 +459,373 @@ public function test_user_creation_with_hooks()
 }
 ```
 
+## Hook Configuration Methods
+
+ApiForge provides several convenience methods to configure common hook patterns quickly and consistently.
+
+### Basic Hook Configuration
+
+#### `configureModelHooks(array $config)`
+
+Configure hooks using a comprehensive array structure:
+
+```php
+protected function setupFilterConfiguration(): void
+{
+    $this->configureModelHooks([
+        'beforeStore' => [
+            'validateData' => [
+                'callback' => function($model, $context) {
+                    // Validation logic
+                },
+                'priority' => 1,
+                'stopOnFailure' => true,
+                'description' => 'Validate model data'
+            ]
+        ],
+        'afterStore' => [
+            'sendNotification' => [
+                'callback' => function($model, $context) {
+                    // Notification logic
+                },
+                'priority' => 10
+            ]
+        ]
+    ]);
+}
+```
+
+#### `registerHook(string $hookType, string $hookName, callable $callback, array $options = [])`
+
+Register individual hooks:
+
+```php
+$this->registerHook('beforeStore', 'generateSlug', function($model, $context) {
+    if (empty($model->slug) && !empty($model->title)) {
+        $model->slug = Str::slug($model->title);
+    }
+}, ['priority' => 1]);
+```
+
+### Convenience Configuration Methods
+
+#### `configureAuditHooks(array $options = [])`
+
+Automatically configure comprehensive audit logging:
+
+```php
+$this->configureAuditHooks([
+    'fields' => ['name', 'email', 'status'],  // Fields to track (empty = all)
+    'track_user' => true,                     // Track who made changes
+    'audit_table' => 'audit_logs'             // Table to store audit logs
+]);
+```
+
+**Generated Hooks:**
+- `beforeUpdate`: Tracks field changes
+- `afterUpdate`: Saves audit log for updates
+- `afterStore`: Logs creation
+- `beforeDelete`: Logs deletion
+
+#### `configureValidationHooks(array $rules, array $options = [])`
+
+Configure validation hooks with Laravel validation rules:
+
+```php
+$this->configureValidationHooks([
+    'name' => 'required|string|max:255',
+    'email' => 'required|email|unique:users,email',
+    'age' => 'integer|min:18'
+], [
+    'stop_on_failure' => true,
+    'messages' => [
+        'email.unique' => 'This email is already registered',
+        'age.min' => 'Must be at least 18 years old'
+    ]
+]);
+```
+
+**Generated Hooks:**
+- `beforeStore`: Validates data before creation
+- `beforeUpdate`: Validates data before updates
+
+#### `configureNotificationHooks(array $config)`
+
+Configure notification hooks for CRUD operations:
+
+```php
+$this->configureNotificationHooks([
+    'onCreate' => [
+        'notification' => \App\Notifications\UserCreated::class,
+        'recipients' => ['admin', 'current_user'],
+        'channels' => ['mail', 'database'],
+        'priority' => 10
+    ],
+    'onUpdate' => [
+        'notification' => \App\Notifications\UserUpdated::class,
+        'recipients' => ['owner', 'admin'],
+        'channels' => ['database'],
+        'watch_fields' => ['status', 'role'],  // Only notify on these changes
+        'priority' => 10
+    ],
+    'onDelete' => [
+        'notification' => \App\Notifications\UserDeleted::class,
+        'recipients' => ['admin'],
+        'channels' => ['mail'],
+        'priority' => 5
+    ]
+]);
+```
+
+**Recipient Types:**
+- `'admin'`: Users with admin role
+- `'current_user'`: Currently authenticated user
+- `'owner'`: Model owner (requires `user()` relationship)
+- `'manager'`: Custom manager resolution
+- `function($model, $context) { ... }`: Custom callback
+- `123`: Specific user ID
+- `'user@example.com'`: Specific email address
+
+#### `configureCacheInvalidationHooks(array $cacheKeys, array $options = [])`
+
+Configure automatic cache invalidation:
+
+```php
+$this->configureCacheInvalidationHooks([
+    'user_list',
+    'user_stats',
+    'user_permissions_{model_id}',
+    'user_profile_{model_id}',
+    'category_users_{category_id}'
+], ['priority' => 20]);
+```
+
+**Cache Key Placeholders:**
+- `{model_id}`: Model's primary key
+- `{model_class}`: Lowercase model class name
+- `{user_id}`: Current user ID
+- `{field_name}`: Any model attribute
+
+**Generated Hooks:**
+- `afterStore`: Invalidates cache after creation
+- `afterUpdate`: Invalidates cache after updates
+- `afterDelete`: Invalidates cache after deletion
+
+#### `configureSlugHooks(string $sourceField, string $slugField = 'slug', array $options = [])`
+
+Configure automatic slug generation:
+
+```php
+$this->configureSlugHooks('title', 'slug', [
+    'unique' => true,           // Ensure slug uniqueness
+    'overwrite' => false,       // Don't overwrite existing slugs
+    'separator' => '-'          // Slug separator
+]);
+```
+
+**Generated Hooks:**
+- `beforeStore`: Generates slug on creation
+- `beforeUpdate`: Updates slug when source field changes
+
+#### `configurePermissionHooks(array $permissions, array $options = [])`
+
+Configure permission checking hooks:
+
+```php
+$this->configurePermissionHooks([
+    'create' => 'create-users',
+    'update' => function($user, $model, $action) {
+        // Custom permission logic
+        return $user->id === $model->id || $user->can('update-users');
+    },
+    'delete' => ['delete-users', 'admin-access']  // Multiple permissions (all required)
+], [
+    'throw_on_failure' => true  // Throw exception vs return false
+]);
+```
+
+**Permission Types:**
+- `string`: Simple permission name
+- `array`: Multiple permissions (all must pass)
+- `callable`: Custom permission callback
+
+**Generated Hooks:**
+- `beforeStore`: Checks create permissions
+- `beforeUpdate`: Checks update permissions
+- `beforeDelete`: Checks delete permissions
+
+## Advanced Hook Patterns
+
+### Conditional Hook Execution
+
+Execute hooks only when specific conditions are met:
+
+```php
+$this->configureModelHooks([
+    'afterStore' => [
+        'sendPremiumWelcome' => [
+            'callback' => function($model, $context) {
+                // Send premium welcome email
+            },
+            'conditions' => [
+                'field' => 'subscription_type',
+                'operator' => 'eq',
+                'value' => 'premium'
+            ]
+        ]
+    ]
+]);
+```
+
+### Hook Chaining and Dependencies
+
+Use context to pass data between hooks:
+
+```php
+$this->configureModelHooks([
+    'beforeUpdate' => [
+        'trackChanges' => [
+            'callback' => function($model, $context) {
+                $changes = $model->getDirty();
+                $context->set('tracked_changes', $changes);
+            },
+            'priority' => 1
+        ]
+    ],
+    'afterUpdate' => [
+        'logChanges' => [
+            'callback' => function($model, $context) {
+                $changes = $context->get('tracked_changes', []);
+                if (!empty($changes)) {
+                    AuditLog::create([
+                        'model_id' => $model->id,
+                        'changes' => $changes
+                    ]);
+                }
+            },
+            'priority' => 5
+        ]
+    ]
+]);
+```
+
+### Error Handling Patterns
+
+#### Graceful Degradation
+
+```php
+$this->configureModelHooks([
+    'afterStore' => [
+        'sendWelcomeEmail' => [
+            'callback' => function($model, $context) {
+                try {
+                    Mail::to($model->email)->send(new WelcomeEmail($model));
+                } catch (\Exception $e) {
+                    Log::warning('Failed to send welcome email', [
+                        'user_id' => $model->id,
+                        'error' => $e->getMessage()
+                    ]);
+                    // Don't fail the entire operation
+                }
+            },
+            'stopOnFailure' => false
+        ]
+    ]
+]);
+```
+
+#### Critical Validation
+
+```php
+$this->configureModelHooks([
+    'beforeStore' => [
+        'validateCriticalRules' => [
+            'callback' => function($model, $context) {
+                if ($model->type === 'admin' && !auth()->user()->isSuperAdmin()) {
+                    throw new AuthorizationException('Only super admins can create admin users');
+                }
+            },
+            'priority' => 1,
+            'stopOnFailure' => true
+        ]
+    ]
+]);
+```
+
+### Performance Optimization Patterns
+
+#### Batch Operations
+
+```php
+$this->configureModelHooks([
+    'afterStore' => [
+        'updateStatistics' => [
+            'callback' => function($model, $context) {
+                // Defer statistics update to avoid N+1 queries
+                dispatch(new UpdateUserStatisticsJob($model->id))->delay(now()->addMinutes(5));
+            },
+            'priority' => 20
+        ]
+    ]
+]);
+```
+
+#### Conditional Heavy Operations
+
+```php
+$this->configureModelHooks([
+    'afterUpdate' => [
+        'reindexSearch' => [
+            'callback' => function($model, $context) {
+                // Only reindex if searchable fields changed
+                $searchableFields = ['name', 'email', 'bio'];
+                $changes = array_keys($model->getDirty());
+                
+                if (array_intersect($searchableFields, $changes)) {
+                    SearchIndexJob::dispatch($model);
+                }
+            },
+            'priority' => 15
+        ]
+    ]
+]);
+```
+
+## Hook Debugging and Monitoring
+
+### Getting Hook Metadata
+
+```php
+// Get all hooks metadata
+$metadata = $this->getHooksMetadata();
+
+// Get specific hook service
+$hookService = $this->getHookService();
+$hooks = $hookService->getHooks('beforeStore');
+```
+
+### Clearing Hooks
+
+```php
+// Clear all hooks
+$this->clearHooks();
+
+// Clear specific hook type
+$this->clearHooks('beforeStore');
+```
+
+### Hook Execution Logging
+
+Enable hook execution logging in configuration:
+
+```php
+// config/apiforge.php
+'hooks' => [
+    'log_execution' => env('APIFORGE_LOG_HOOKS', false),
+    'throw_on_failure' => env('APIFORGE_THROW_ON_HOOK_FAILURE', true)
+]
+```
+
 ## Migration Guide
 
 ### From Basic Hooks
@@ -505,4 +872,30 @@ protected function setupFilterConfiguration(): void
         ]
     ]);
 }
+```
+
+### Using Convenience Methods
+
+Replace manual hook configuration with convenience methods:
+
+```php
+// Old way
+$this->configureModelHooks([
+    'beforeUpdate' => [
+        'trackChanges' => function($model, $context) {
+            // Manual audit logic
+        }
+    ],
+    'afterUpdate' => [
+        'saveAudit' => function($model, $context) {
+            // Manual audit saving
+        }
+    ]
+]);
+
+// New way
+$this->configureAuditHooks([
+    'fields' => ['name', 'email', 'status'],
+    'track_user' => true
+]);
 ```

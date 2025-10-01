@@ -114,6 +114,182 @@ class UserController extends BaseApiController
             ],
             'max_fields' => 25
         ]);
+
+        // Configure model hooks for advanced functionality
+        $this->configureModelHooks([
+            'beforeStore' => [
+                'generateSlug' => [
+                    'callback' => function($model, $context) {
+                        if (empty($model->slug) && !empty($model->name)) {
+                            $model->slug = \Str::slug($model->name);
+                        }
+                    },
+                    'priority' => 1,
+                    'description' => 'Generate slug from name if not provided'
+                ],
+                'validateBusinessRules' => [
+                    'callback' => function($model, $context) {
+                        // Custom business validation
+                        if ($model->role === 'admin' && !auth()->user()->can('create-admin')) {
+                            throw new \Illuminate\Validation\ValidationException(
+                                validator([], []), ['role' => 'You cannot create admin users']
+                            );
+                        }
+                    },
+                    'priority' => 2,
+                    'stopOnFailure' => true,
+                    'description' => 'Validate business rules before creation'
+                ]
+            ],
+            
+            'afterStore' => [
+                'sendWelcomeEmail' => [
+                    'callback' => function($model, $context) {
+                        // Send welcome email to new users
+                        if ($model->email && $model->active) {
+                            \Mail::to($model->email)->queue(new \App\Mail\WelcomeUser($model));
+                        }
+                    },
+                    'priority' => 10,
+                    'description' => 'Send welcome email to new users'
+                ],
+                'createUserProfile' => [
+                    'callback' => function($model, $context) {
+                        // Create default user profile
+                        $model->profile()->create([
+                            'bio' => 'New user',
+                            'preferences' => json_encode(['theme' => 'light'])
+                        ]);
+                    },
+                    'priority' => 5,
+                    'description' => 'Create default user profile'
+                ]
+            ],
+            
+            'beforeUpdate' => [
+                'trackChanges' => [
+                    'callback' => function($model, $context) {
+                        $changes = $model->getDirty();
+                        if (!empty($changes)) {
+                            \Log::info('User updated', [
+                                'user_id' => $model->id,
+                                'changes' => $changes,
+                                'updated_by' => auth()->id()
+                            ]);
+                        }
+                    },
+                    'priority' => 1,
+                    'description' => 'Log user changes for audit trail'
+                ]
+            ],
+            
+            'afterUpdate' => [
+                'syncRelatedData' => [
+                    'callback' => function($model, $context) {
+                        // Sync role changes to related models
+                        if ($model->wasChanged('role')) {
+                            $model->permissions()->sync(
+                                \App\Models\Role::where('name', $model->role)->first()->permissions ?? []
+                            );
+                        }
+                    },
+                    'priority' => 5,
+                    'description' => 'Sync permissions when role changes'
+                ],
+                'invalidateCache' => [
+                    'callback' => function($model, $context) {
+                        // Clear user-related cache
+                        \Cache::forget("user_permissions_{$model->id}");
+                        \Cache::forget("user_profile_{$model->id}");
+                    },
+                    'priority' => 15,
+                    'description' => 'Clear user cache after updates'
+                ]
+            ],
+            
+            'beforeDelete' => [
+                'checkDependencies' => [
+                    'callback' => function($model, $context) {
+                        // Prevent deletion if user has active orders
+                        if ($model->orders()->where('status', 'active')->exists()) {
+                            throw new \Exception('Cannot delete user with active orders');
+                        }
+                        return true;
+                    },
+                    'priority' => 1,
+                    'stopOnFailure' => true,
+                    'description' => 'Check for dependencies before deletion'
+                ]
+            ],
+            
+            'afterDelete' => [
+                'cleanupFiles' => [
+                    'callback' => function($model, $context) {
+                        // Delete user avatar and files
+                        if ($model->profile && $model->profile->avatar) {
+                            \Storage::delete($model->profile->avatar);
+                        }
+                    },
+                    'priority' => 10,
+                    'description' => 'Clean up user files after deletion'
+                ],
+                'notifyAdmins' => [
+                    'callback' => function($model, $context) {
+                        // Notify admins of user deletion
+                        $admins = \App\Models\User::where('role', 'admin')->get();
+                        foreach ($admins as $admin) {
+                            $admin->notify(new \App\Notifications\UserDeleted($model));
+                        }
+                    },
+                    'priority' => 20,
+                    'description' => 'Notify administrators of user deletion'
+                ]
+            ]
+        ]);
+
+        // Configure helper hooks using convenience methods
+        $this->configureAuditHooks([
+            'fields' => ['name', 'email', 'role', 'active'],
+            'track_user' => true,
+            'audit_table' => 'user_audit_logs'
+        ]);
+
+        $this->configureNotificationHooks([
+            'onCreate' => [
+                'notification' => \App\Notifications\UserCreated::class,
+                'recipients' => ['admin', 'current_user'],
+                'channels' => ['mail', 'database'],
+                'priority' => 10
+            ],
+            'onUpdate' => [
+                'notification' => \App\Notifications\UserUpdated::class,
+                'recipients' => ['owner', 'admin'],
+                'channels' => ['database'],
+                'watch_fields' => ['role', 'active'],
+                'priority' => 10
+            ]
+        ]);
+
+        $this->configureCacheInvalidationHooks([
+            'user_list',
+            'user_stats',
+            'user_permissions_{model_id}',
+            'user_profile_{model_id}'
+        ]);
+
+        $this->configureSlugHooks('name', 'slug', [
+            'unique' => true,
+            'overwrite' => false
+        ]);
+
+        $this->configurePermissionHooks([
+            'create' => 'create-users',
+            'update' => function($user, $model, $action) {
+                // Users can update themselves, admins can update anyone
+                return $user->id === $model->id || $user->can('update-users');
+            },
+            'delete' => ['delete-users', 'admin-access']
+        ]);
     }
 
     /**

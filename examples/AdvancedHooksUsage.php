@@ -1,50 +1,26 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Api;
 
+use App\Models\Product;
 use Illuminate\Http\Request;
 use MarcosBrendon\ApiForge\Http\Controllers\BaseApiController;
-use App\Models\User;
-use App\Services\NotificationService;
-use App\Services\AuditService;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
-class UserController extends BaseApiController
+/**
+ * Advanced Model Hooks Usage Examples
+ * 
+ * This file demonstrates comprehensive usage of model hooks in ApiForge,
+ * showing various patterns and best practices for implementing business logic
+ * through hooks.
+ */
+class ProductController extends BaseApiController
 {
     /**
      * Get the model class for this controller
      */
     protected function getModelClass(): string
     {
-        return User::class;
-    }
-
-    /**
-     * Validate data for store operations
-     */
-    protected function validateStoreData(Request $request): array
-    {
-        return $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:users',
-            'password' => 'required|string|min:8',
-            'role' => 'sometimes|string|in:user,admin,moderator'
-        ]);
-    }
-
-    /**
-     * Validate data for update operations
-     */
-    protected function validateUpdateData(Request $request, $resource): array
-    {
-        return $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'email' => 'sometimes|email|unique:users,email,' . $resource->id,
-            'password' => 'sometimes|string|min:8',
-            'role' => 'sometimes|string|in:user,admin,moderator'
-        ]);
+        return Product::class;
     }
 
     /**
@@ -52,349 +28,546 @@ class UserController extends BaseApiController
      */
     protected function setupFilterConfiguration(): void
     {
-        // Configure regular filters
+        // Basic filter configuration
         $this->configureFilters([
-            'name' => ['like', 'eq'],
-            'email' => ['like', 'eq'],
-            'role' => ['eq', 'in'],
-            'created_at' => ['gte', 'lte', 'between'],
-            'updated_at' => ['gte', 'lte', 'between']
+            'name' => [
+                'type' => 'string',
+                'operators' => ['eq', 'like', 'ne'],
+                'searchable' => true,
+                'sortable' => true
+            ],
+            'price' => [
+                'type' => 'float',
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true
+            ],
+            'category_id' => [
+                'type' => 'integer',
+                'operators' => ['eq', 'in', 'ne']
+            ],
+            'active' => [
+                'type' => 'boolean',
+                'operators' => ['eq']
+            ]
         ]);
 
-        // Configure advanced model hooks
+        // ========================================
+        // COMPREHENSIVE HOOK CONFIGURATION
+        // ========================================
+
         $this->configureModelHooks([
-            // Authorization hooks
-            'beforeAuthorization' => [
-                'checkUserPermissions' => [
+            // ========================================
+            // BEFORE STORE HOOKS
+            // ========================================
+            'beforeStore' => [
+                // Data validation and transformation
+                'validateProductData' => [
                     'callback' => function($model, $context) {
-                        $user = auth()->user();
-                        $action = $context->data['action'] ?? '';
-                        
-                        // Admin can do everything
-                        if ($user && $user->role === 'admin') {
-                            return true;
+                        // Custom business validation
+                        if ($model->price <= 0) {
+                            throw new \InvalidArgumentException('Product price must be greater than 0');
                         }
                         
-                        // Users can only view and update their own data
-                        if ($action === 'show' || $action === 'index') {
-                            return true;
+                        if (empty($model->sku)) {
+                            $model->sku = $this->generateSKU($model);
                         }
-                        
-                        if (($action === 'update' || $action === 'delete') && $model->exists) {
-                            return $user && $user->id === $model->id;
-                        }
-                        
-                        // Only admins can create users
-                        if ($action === 'store') {
-                            return $user && $user->role === 'admin';
-                        }
-                        
-                        return false;
                     },
                     'priority' => 1,
                     'stopOnFailure' => true,
-                    'description' => 'Check user permissions for the requested action'
-                ]
-            ],
-
-            // Validation hooks
-            'beforeValidation' => [
-                'sanitizeInput' => [
-                    'callback' => function($model, $context) {
-                        $data = $context->data;
-                        
-                        // Sanitize name
-                        if (isset($data['name'])) {
-                            $data['name'] = trim($data['name']);
-                        }
-                        
-                        // Normalize email
-                        if (isset($data['email'])) {
-                            $data['email'] = strtolower(trim($data['email']));
-                        }
-                        
-                        return $data;
-                    },
-                    'priority' => 1,
-                    'description' => 'Sanitize and normalize input data'
-                ]
-            ],
-
-            'afterValidation' => [
-                'logValidation' => [
-                    'callback' => function($model, $context) {
-                        Log::info('User data validated', [
-                            'user_id' => auth()->id(),
-                            'validated_fields' => array_keys($context->data)
-                        ]);
-                    },
-                    'description' => 'Log successful validation'
-                ]
-            ],
-
-            // Transformation hooks
-            'beforeTransform' => [
-                'generateSlug' => [
-                    'callback' => function($model, $context) {
-                        $data = $context->data;
-                        
-                        // Generate username from name if not provided
-                        if (isset($data['name']) && !isset($data['username'])) {
-                            $data['username'] = Str::slug($data['name']) . '_' . time();
-                        }
-                        
-                        return $data;
-                    },
-                    'description' => 'Generate username slug from name'
+                    'description' => 'Validate product data and generate SKU'
                 ],
-                
-                'hashPassword' => [
-                    'callback' => function($model, $context) {
-                        $data = $context->data;
-                        
-                        // Hash password if provided
-                        if (isset($data['password'])) {
-                            $data['password'] = bcrypt($data['password']);
-                        }
-                        
-                        return $data;
-                    },
-                    'priority' => 5,
-                    'description' => 'Hash user password'
-                ]
-            ],
 
-            // Store hooks
-            'beforeStore' => [
+                // Check inventory limits
+                'checkInventoryLimits' => [
+                    'callback' => function($model, $context) {
+                        $category = \App\Models\Category::find($model->category_id);
+                        if ($category && $category->max_products > 0) {
+                            $currentCount = Product::where('category_id', $model->category_id)->count();
+                            if ($currentCount >= $category->max_products) {
+                                throw new \Exception("Category has reached maximum product limit ({$category->max_products})");
+                            }
+                        }
+                    },
+                    'priority' => 2,
+                    'conditions' => [
+                        'field' => 'category_id',
+                        'operator' => 'not_null'
+                    ],
+                    'description' => 'Check category product limits'
+                ],
+
+                // Set default values
                 'setDefaults' => [
                     'callback' => function($model, $context) {
-                        // Set default role if not provided
-                        if (!$model->role) {
-                            $model->role = 'user';
-                        }
+                        $model->active = $model->active ?? true;
+                        $model->featured = $model->featured ?? false;
+                        $model->sort_order = $model->sort_order ?? 0;
                         
-                        // Set email verification timestamp for admins
-                        if (auth()->user() && auth()->user()->role === 'admin') {
-                            $model->email_verified_at = now();
+                        // Set created_by
+                        if (auth()->check()) {
+                            $model->created_by = auth()->id();
                         }
                     },
-                    'description' => 'Set default values for new users'
+                    'priority' => 5,
+                    'description' => 'Set default values for new products'
                 ]
             ],
 
+            // ========================================
+            // AFTER STORE HOOKS
+            // ========================================
             'afterStore' => [
-                'sendWelcomeEmail' => [
+                // Create initial inventory record
+                'createInventoryRecord' => [
                     'callback' => function($model, $context) {
-                        // Send welcome email to new users
-                        NotificationService::sendWelcomeEmail($model);
-                    },
-                    'priority' => 10,
-                    'description' => 'Send welcome email to new users'
-                ],
-                
-                'clearUserCache' => [
-                    'callback' => function($model, $context) {
-                        Cache::tags(['users'])->flush();
-                    },
-                    'priority' => 20,
-                    'description' => 'Clear user-related cache'
-                ]
-            ],
-
-            // Update hooks
-            'beforeUpdate' => [
-                'trackChanges' => [
-                    'callback' => function($model, $context) {
-                        $changes = $context->data['changes'] ?? [];
-                        
-                        if (!empty($changes)) {
-                            // Store changes for audit
-                            $model->setAttribute('_audit_changes', $changes);
-                        }
-                    },
-                    'description' => 'Track changes for audit purposes'
-                ]
-            ],
-
-            'afterUpdate' => [
-                'invalidateCache' => [
-                    'callback' => function($model, $context) {
-                        // Invalidate specific user cache
-                        Cache::forget("user_{$model->id}");
-                        Cache::tags(['users'])->flush();
+                        \App\Models\Inventory::create([
+                            'product_id' => $model->id,
+                            'quantity' => $context->get('initial_quantity', 0),
+                            'reserved_quantity' => 0,
+                            'location' => 'main_warehouse'
+                        ]);
                     },
                     'priority' => 1,
-                    'description' => 'Invalidate user cache after update'
+                    'description' => 'Create initial inventory record'
                 ],
-                
-                'notifyProfileUpdate' => [
+
+                // Generate product images
+                'processProductImages' => [
                     'callback' => function($model, $context) {
-                        $changes = $context->data['changes'] ?? [];
-                        
-                        // Notify user of profile changes
-                        if (!empty($changes)) {
-                            NotificationService::sendProfileUpdateNotification($model, $changes);
+                        $images = $context->get('images', []);
+                        foreach ($images as $image) {
+                            $model->images()->create([
+                                'url' => $image['url'],
+                                'alt_text' => $image['alt_text'] ?? $model->name,
+                                'sort_order' => $image['sort_order'] ?? 0
+                            ]);
+                        }
+                    },
+                    'priority' => 5,
+                    'description' => 'Process and store product images'
+                ],
+
+                // Update category statistics
+                'updateCategoryStats' => [
+                    'callback' => function($model, $context) {
+                        if ($model->category_id) {
+                            $category = $model->category;
+                            $category->increment('products_count');
+                            $category->touch(); // Update updated_at
                         }
                     },
                     'priority' => 10,
-                    'description' => 'Notify user of profile updates'
+                    'description' => 'Update category product count'
+                ],
+
+                // Send notifications
+                'notifyStakeholders' => [
+                    'callback' => function($model, $context) {
+                        // Notify inventory managers
+                        $managers = \App\Models\User::where('role', 'inventory_manager')->get();
+                        foreach ($managers as $manager) {
+                            $manager->notify(new \App\Notifications\ProductCreated($model));
+                        }
+
+                        // Notify category managers
+                        if ($model->category && $model->category->manager) {
+                            $model->category->manager->notify(
+                                new \App\Notifications\ProductAddedToCategory($model)
+                            );
+                        }
+                    },
+                    'priority' => 15,
+                    'description' => 'Notify relevant stakeholders'
+                ],
+
+                // Index for search
+                'indexForSearch' => [
+                    'callback' => function($model, $context) {
+                        // Add to search index (Elasticsearch, Algolia, etc.)
+                        if (config('services.search.enabled')) {
+                            \App\Services\SearchService::index($model);
+                        }
+                    },
+                    'priority' => 20,
+                    'description' => 'Add product to search index'
                 ]
             ],
 
-            // Delete hooks
-            'beforeDelete' => [
-                'checkDependencies' => [
+            // ========================================
+            // BEFORE UPDATE HOOKS
+            // ========================================
+            'beforeUpdate' => [
+                // Track price changes
+                'trackPriceChanges' => [
                     'callback' => function($model, $context) {
-                        // Prevent deletion if user has orders
-                        if ($model->orders()->exists()) {
-                            throw new \Exception('Cannot delete user with existing orders');
+                        if ($model->isDirty('price')) {
+                            $oldPrice = $model->getOriginal('price');
+                            $newPrice = $model->price;
+                            
+                            // Log price change
+                            \App\Models\PriceHistory::create([
+                                'product_id' => $model->id,
+                                'old_price' => $oldPrice,
+                                'new_price' => $newPrice,
+                                'changed_by' => auth()->id(),
+                                'reason' => $context->get('price_change_reason', 'Manual update')
+                            ]);
+
+                            // Store in context for after hook
+                            $context->set('price_changed', true);
+                            $context->set('old_price', $oldPrice);
+                            $context->set('new_price', $newPrice);
                         }
-                        
-                        // Prevent deletion of admin users by non-admins
-                        if ($model->role === 'admin' && (!auth()->user() || auth()->user()->role !== 'admin')) {
-                            return false;
+                    },
+                    'priority' => 1,
+                    'description' => 'Track and log price changes'
+                ],
+
+                // Validate status changes
+                'validateStatusChange' => [
+                    'callback' => function($model, $context) {
+                        if ($model->isDirty('active')) {
+                            // Check if product can be deactivated
+                            if (!$model->active && $model->getOriginal('active')) {
+                                $activeOrders = $model->orderItems()
+                                    ->whereHas('order', function($q) {
+                                        $q->whereIn('status', ['pending', 'processing']);
+                                    })->exists();
+
+                                if ($activeOrders) {
+                                    throw new \Exception('Cannot deactivate product with pending orders');
+                                }
+                            }
                         }
-                        
+                    },
+                    'priority' => 2,
+                    'stopOnFailure' => true,
+                    'description' => 'Validate product status changes'
+                ],
+
+                // Update modified timestamp and user
+                'trackModification' => [
+                    'callback' => function($model, $context) {
+                        if (auth()->check()) {
+                            $model->updated_by = auth()->id();
+                        }
+                    },
+                    'priority' => 10,
+                    'description' => 'Track who modified the product'
+                ]
+            ],
+
+            // ========================================
+            // AFTER UPDATE HOOKS
+            // ========================================
+            'afterUpdate' => [
+                // Update search index
+                'updateSearchIndex' => [
+                    'callback' => function($model, $context) {
+                        if (config('services.search.enabled')) {
+                            \App\Services\SearchService::update($model);
+                        }
+                    },
+                    'priority' => 1,
+                    'description' => 'Update product in search index'
+                ],
+
+                // Handle category changes
+                'handleCategoryChange' => [
+                    'callback' => function($model, $context) {
+                        if ($model->wasChanged('category_id')) {
+                            $oldCategoryId = $model->getOriginal('category_id');
+                            $newCategoryId = $model->category_id;
+
+                            // Update old category count
+                            if ($oldCategoryId) {
+                                \App\Models\Category::where('id', $oldCategoryId)
+                                    ->decrement('products_count');
+                            }
+
+                            // Update new category count
+                            if ($newCategoryId) {
+                                \App\Models\Category::where('id', $newCategoryId)
+                                    ->increment('products_count');
+                            }
+                        }
+                    },
+                    'priority' => 5,
+                    'description' => 'Handle category change statistics'
+                ],
+
+                // Send price change notifications
+                'notifyPriceChange' => [
+                    'callback' => function($model, $context) {
+                        if ($context->get('price_changed')) {
+                            $oldPrice = $context->get('old_price');
+                            $newPrice = $context->get('new_price');
+                            $changePercent = (($newPrice - $oldPrice) / $oldPrice) * 100;
+
+                            // Notify if significant price change (>10%)
+                            if (abs($changePercent) > 10) {
+                                $managers = \App\Models\User::where('role', 'pricing_manager')->get();
+                                foreach ($managers as $manager) {
+                                    $manager->notify(new \App\Notifications\SignificantPriceChange(
+                                        $model, $oldPrice, $newPrice, $changePercent
+                                    ));
+                                }
+                            }
+                        }
+                    },
+                    'priority' => 10,
+                    'description' => 'Notify significant price changes'
+                ],
+
+                // Clear related caches
+                'clearCaches' => [
+                    'callback' => function($model, $context) {
+                        $cacheKeys = [
+                            "product_{$model->id}",
+                            "product_category_{$model->category_id}",
+                            'featured_products',
+                            'product_search_*'
+                        ];
+
+                        foreach ($cacheKeys as $key) {
+                            if (str_contains($key, '*')) {
+                                // Clear pattern-based cache keys
+                                \Cache::flush(); // Or use more specific pattern clearing
+                            } else {
+                                \Cache::forget($key);
+                            }
+                        }
+                    },
+                    'priority' => 15,
+                    'description' => 'Clear product-related caches'
+                ]
+            ],
+
+            // ========================================
+            // BEFORE DELETE HOOKS
+            // ========================================
+            'beforeDelete' => [
+                // Check for dependencies
+                'checkOrderDependencies' => [
+                    'callback' => function($model, $context) {
+                        $orderCount = $model->orderItems()->count();
+                        if ($orderCount > 0) {
+                            throw new \Exception("Cannot delete product with {$orderCount} order(s)");
+                        }
                         return true;
                     },
                     'priority' => 1,
                     'stopOnFailure' => true,
-                    'description' => 'Check dependencies before deletion'
-                ]
-            ],
-
-            'afterDelete' => [
-                'cleanupUserData' => [
-                    'callback' => function($model, $context) {
-                        // Clean up user-related data
-                        Cache::forget("user_{$model->id}");
-                        Cache::tags(['users'])->flush();
-                        
-                        // Delete user files if any
-                        if ($model->avatar) {
-                            \Storage::delete($model->avatar);
-                        }
-                    },
-                    'priority' => 1,
-                    'description' => 'Clean up user data after deletion'
+                    'description' => 'Check for order dependencies'
                 ],
-                
-                'notifyAdmins' => [
+
+                'checkInventoryDependencies' => [
                     'callback' => function($model, $context) {
-                        // Notify admins of user deletion
-                        NotificationService::notifyAdmins('User deleted', [
-                            'deleted_user' => $model->email,
-                            'deleted_by' => auth()->user()->email ?? 'system',
+                        $inventory = $model->inventory;
+                        if ($inventory && $inventory->quantity > 0) {
+                            throw new \Exception('Cannot delete product with remaining inventory');
+                        }
+                        return true;
+                    },
+                    'priority' => 2,
+                    'stopOnFailure' => true,
+                    'description' => 'Check inventory before deletion'
+                ],
+
+                // Archive product data
+                'archiveProductData' => [
+                    'callback' => function($model, $context) {
+                        \App\Models\ArchivedProduct::create([
+                            'original_id' => $model->id,
+                            'name' => $model->name,
+                            'sku' => $model->sku,
+                            'price' => $model->price,
+                            'category_id' => $model->category_id,
+                            'data' => $model->toArray(),
+                            'deleted_by' => auth()->id(),
                             'deleted_at' => now()
                         ]);
                     },
+                    'priority' => 5,
+                    'description' => 'Archive product data before deletion'
+                ]
+            ],
+
+            // ========================================
+            // AFTER DELETE HOOKS
+            // ========================================
+            'afterDelete' => [
+                // Clean up related data
+                'cleanupRelatedData' => [
+                    'callback' => function($model, $context) {
+                        // Delete inventory records
+                        $model->inventory()->delete();
+                        
+                        // Delete images
+                        foreach ($model->images as $image) {
+                            \Storage::delete($image->url);
+                            $image->delete();
+                        }
+                        
+                        // Delete price history
+                        $model->priceHistory()->delete();
+                    },
+                    'priority' => 1,
+                    'description' => 'Clean up related product data'
+                ],
+
+                // Update category statistics
+                'updateCategoryStatsAfterDelete' => [
+                    'callback' => function($model, $context) {
+                        if ($model->category_id) {
+                            \App\Models\Category::where('id', $model->category_id)
+                                ->decrement('products_count');
+                        }
+                    },
+                    'priority' => 5,
+                    'description' => 'Update category statistics after deletion'
+                ],
+
+                // Remove from search index
+                'removeFromSearchIndex' => [
+                    'callback' => function($model, $context) {
+                        if (config('services.search.enabled')) {
+                            \App\Services\SearchService::delete($model->id);
+                        }
+                    },
                     'priority' => 10,
-                    'description' => 'Notify admins of user deletion'
-                ]
-            ],
+                    'description' => 'Remove product from search index'
+                ],
 
-            // Audit hooks
-            'beforeAudit' => [
-                'prepareAuditData' => [
+                // Send deletion notifications
+                'notifyDeletion' => [
                     'callback' => function($model, $context) {
-                        $auditData = [
-                            'user_id' => auth()->id(),
-                            'ip_address' => request()->ip(),
-                            'user_agent' => request()->userAgent(),
-                            'timestamp' => now()
-                        ];
-                        
-                        // Store audit data in context for afterAudit
-                        $context->set('audit_metadata', $auditData);
-                    },
-                    'description' => 'Prepare audit metadata'
-                ]
-            ],
-
-            'afterAudit' => [
-                'logAuditTrail' => [
-                    'callback' => function($model, $context) {
-                        $auditMetadata = $context->get('audit_metadata', []);
-                        
-                        AuditService::log([
-                            'model_type' => get_class($model),
-                            'model_id' => $model->getKey(),
-                            'action' => $context->data['action'] ?? 'unknown',
-                            'changes' => $context->data['changes'] ?? [],
-                            'metadata' => $auditMetadata
-                        ]);
-                    },
-                    'description' => 'Log audit trail'
-                ]
-            ],
-
-            // Query hooks
-            'beforeQuery' => [
-                'optimizeQuery' => [
-                    'callback' => function($model, $context) {
-                        $query = $context->data['query'] ?? null;
-                        
-                        if ($query) {
-                            // Add common eager loading
-                            $query->with(['profile', 'roles']);
+                        $managers = \App\Models\User::whereIn('role', ['inventory_manager', 'product_manager'])->get();
+                        foreach ($managers as $manager) {
+                            $manager->notify(new \App\Notifications\ProductDeleted($model));
                         }
                     },
-                    'description' => 'Optimize queries with eager loading'
-                ]
-            ],
-
-            // Response hooks
-            'beforeResponse' => [
-                'formatResponse' => [
-                    'callback' => function($model, $context) {
-                        $responseData = $context->data;
-                        
-                        // Add metadata to response
-                        if (isset($responseData['data'])) {
-                            $responseData['metadata'] = array_merge(
-                                $responseData['metadata'] ?? [],
-                                [
-                                    'processed_at' => now()->toISOString(),
-                                    'version' => '2.0'
-                                ]
-                            );
-                        }
-                        
-                        return $responseData;
-                    },
-                    'description' => 'Format response with additional metadata'
-                ]
-            ],
-
-            // Cache hooks
-            'beforeCache' => [
-                'prepareCacheKey' => [
-                    'callback' => function($model, $context) {
-                        $queryParams = $context->data['query_params'] ?? [];
-                        
-                        // Generate cache key based on query parameters
-                        $cacheKey = 'users_' . md5(serialize($queryParams));
-                        
-                        return ['cache_key' => $cacheKey];
-                    },
-                    'description' => 'Prepare cache key for query results'
-                ]
-            ],
-
-            // Notification hooks
-            'beforeNotification' => [
-                'prepareNotificationData' => [
-                    'callback' => function($model, $context) {
-                        $notificationData = $context->data;
-                        
-                        // Add user preferences to notification data
-                        $notificationData['user_preferences'] = $model->notification_preferences ?? [];
-                        
-                        return $notificationData;
-                    },
-                    'description' => 'Prepare notification data with user preferences'
+                    'priority' => 15,
+                    'description' => 'Notify stakeholders of product deletion'
                 ]
             ]
         ]);
+
+        // ========================================
+        // CONVENIENCE METHOD CONFIGURATIONS
+        // ========================================
+
+        // Configure comprehensive audit logging
+        $this->configureAuditHooks([
+            'fields' => ['name', 'sku', 'price', 'category_id', 'active'],
+            'track_user' => true,
+            'audit_table' => 'product_audit_logs'
+        ]);
+
+        // Configure notification system
+        $this->configureNotificationHooks([
+            'onCreate' => [
+                'notification' => \App\Notifications\ProductCreated::class,
+                'recipients' => ['inventory_manager', 'category_manager'],
+                'channels' => ['mail', 'database'],
+                'priority' => 10
+            ],
+            'onUpdate' => [
+                'notification' => \App\Notifications\ProductUpdated::class,
+                'recipients' => ['inventory_manager'],
+                'channels' => ['database'],
+                'watch_fields' => ['price', 'active', 'category_id'],
+                'priority' => 10
+            ],
+            'onDelete' => [
+                'notification' => \App\Notifications\ProductDeleted::class,
+                'recipients' => ['product_manager', 'inventory_manager'],
+                'channels' => ['mail', 'database'],
+                'priority' => 5
+            ]
+        ]);
+
+        // Configure cache invalidation
+        $this->configureCacheInvalidationHooks([
+            'product_{model_id}',
+            'products_category_{category_id}',
+            'featured_products',
+            'product_search',
+            'category_products_{category_id}'
+        ], ['priority' => 20]);
+
+        // Configure automatic slug generation
+        $this->configureSlugHooks('name', 'slug', [
+            'unique' => true,
+            'overwrite' => false,
+            'separator' => '-'
+        ]);
+
+        // Configure permission checks
+        $this->configurePermissionHooks([
+            'create' => 'create-products',
+            'update' => function($user, $model, $action) {
+                // Product managers can update any product
+                // Category managers can only update products in their categories
+                if ($user->can('update-any-product')) {
+                    return true;
+                }
+                
+                if ($user->can('update-category-products')) {
+                    $managedCategories = $user->managedCategories->pluck('id')->toArray();
+                    return in_array($model->category_id, $managedCategories);
+                }
+                
+                return false;
+            },
+            'delete' => ['delete-products', 'admin-access']
+        ], [
+            'throw_on_failure' => true
+        ]);
+
+        // Configure validation hooks
+        $this->configureValidationHooks([
+            'name' => 'required|string|max:255',
+            'sku' => 'required|string|unique:products,sku',
+            'price' => 'required|numeric|min:0.01',
+            'category_id' => 'required|exists:categories,id'
+        ], [
+            'stop_on_failure' => true,
+            'messages' => [
+                'sku.unique' => 'This SKU is already in use by another product',
+                'price.min' => 'Product price must be greater than 0'
+            ]
+        ]);
+    }
+
+    /**
+     * Generate unique SKU for product
+     */
+    private function generateSKU($product): string
+    {
+        $prefix = $product->category ? strtoupper(substr($product->category->name, 0, 3)) : 'PRD';
+        $timestamp = now()->format('ymd');
+        $random = strtoupper(\Str::random(4));
+        
+        return "{$prefix}-{$timestamp}-{$random}";
+    }
+
+    /**
+     * Get default relationships to load
+     */
+    protected function getDefaultRelationships(): array
+    {
+        return ['category:id,name', 'inventory:id,product_id,quantity'];
+    }
+
+    /**
+     * Apply default scopes
+     */
+    protected function applyDefaultScopes($query, Request $request): void
+    {
+        // Only show active products by default
+        if (!$request->has('active')) {
+            $query->where('active', true);
+        }
     }
 }
