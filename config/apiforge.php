@@ -287,6 +287,7 @@ return [
         'default_cache_ttl' => 3600, // seconds
         'log_operations' => env('APIFORGE_LOG_VIRTUAL_FIELDS', false),
         'throw_on_failure' => true,
+        'validate_return_types' => env('APIFORGE_VF_VALIDATE_RETURN_TYPES', false),
         
         // Cache configuration
         'cache_key_prefix' => 'vf_',
@@ -320,5 +321,106 @@ return [
         'continue_on_batch_error' => false,
         'strict_limits' => true,
         'force_gc_frequency' => 10, // Force garbage collection every N batches
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Model Hooks Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure model hook behavior and execution settings.
+    |
+    */
+    'model_hooks' => [
+        'enabled' => true,
+        'log_execution' => env('APIFORGE_LOG_HOOKS', false),
+        'throw_on_failure' => true,
+        
+        // Performance limits
+        'memory_limit' => 128, // MB
+        'time_limit' => 30, // seconds
+        'max_retries' => 3,
+        
+        // Transaction handling
+        'use_transactions' => true,
+        'rollback_on_failure' => true,
+        
+        // Monitoring
+        'enable_monitoring' => env('APIFORGE_HOOK_MONITORING', false),
+        'log_performance' => env('APIFORGE_HOOK_LOG_PERFORMANCE', false),
+        'log_slow_execution' => true,
+        'slow_execution_threshold' => 1000, // milliseconds
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Error Handling Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure error handling behavior for virtual fields and model hooks.
+    |
+    */
+    'error_handling' => [
+        'throw_on_failure' => env('APIFORGE_THROW_ON_FAILURE', true),
+        'log_errors' => env('APIFORGE_LOG_ERRORS', true),
+        'use_transactions' => env('APIFORGE_USE_TRANSACTIONS', true),
+        'max_retries' => env('APIFORGE_MAX_RETRIES', 3),
+        
+        // Error rate monitoring
+        'monitor_error_rate' => env('APIFORGE_MONITOR_ERROR_RATE', true),
+        'error_rate_threshold' => env('APIFORGE_ERROR_RATE_THRESHOLD', 10), // errors per minute
+        'error_rate_window' => env('APIFORGE_ERROR_RATE_WINDOW', 60), // seconds
+        
+        // Timeout settings
+        'default_timeout' => env('APIFORGE_DEFAULT_TIMEOUT', 30), // seconds
+        'virtual_field_timeout' => env('APIFORGE_VF_TIMEOUT', 30), // seconds
+        'hook_timeout' => env('APIFORGE_HOOK_TIMEOUT', 30), // seconds
+        
+        // Memory limits
+        'default_memory_limit' => env('APIFORGE_DEFAULT_MEMORY_LIMIT', 128), // MB
+        'virtual_field_memory_limit' => env('APIFORGE_VF_MEMORY_LIMIT', 128), // MB
+        'hook_memory_limit' => env('APIFORGE_HOOK_MEMORY_LIMIT', 128), // MB
+        
+        // Retry configuration
+        'retry_delay_base' => 100, // milliseconds (exponential backoff base)
+        'retry_delay_max' => 5000, // milliseconds (maximum delay)
+        'retry_on_timeout' => true,
+        'retry_on_memory_limit' => false,
+        
+        // Logging configuration
+        'log_level' => env('APIFORGE_ERROR_LOG_LEVEL', 'error'),
+        'include_stack_trace' => env('APIFORGE_INCLUDE_STACK_TRACE', false),
+        'include_context' => env('APIFORGE_INCLUDE_ERROR_CONTEXT', true),
+        'log_to_separate_channel' => env('APIFORGE_SEPARATE_ERROR_LOG', false),
+        'error_log_channel' => env('APIFORGE_ERROR_LOG_CHANNEL', 'apiforge'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Configuration Validation Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure startup validation behavior for virtual fields and hooks.
+    |
+    */
+    'validation' => [
+        'enabled' => env('APIFORGE_VALIDATION_ENABLED', true),
+        'throw_on_failure' => env('APIFORGE_VALIDATION_THROW_ON_FAILURE', true),
+        'log_validation' => env('APIFORGE_LOG_VALIDATION', true),
+        
+        // Startup validation
+        'validate_on_startup' => env('APIFORGE_VALIDATE_ON_STARTUP', true),
+        'validate_virtual_fields' => env('APIFORGE_VALIDATE_VIRTUAL_FIELDS', true),
+        'validate_model_hooks' => env('APIFORGE_VALIDATE_MODEL_HOOKS', true),
+        
+        // Runtime validation
+        'validate_configurations' => env('APIFORGE_VALIDATE_CONFIGURATIONS', true),
+        'validate_dependencies' => env('APIFORGE_VALIDATE_DEPENDENCIES', true),
+        'validate_return_types' => env('APIFORGE_VALIDATE_RETURN_TYPES', false),
+        
+        // Validation reporting
+        'generate_suggestions' => env('APIFORGE_GENERATE_SUGGESTIONS', true),
+        'include_warnings' => env('APIFORGE_INCLUDE_WARNINGS', true),
+        'detailed_error_messages' => env('APIFORGE_DETAILED_ERROR_MESSAGES', true),
     ],
 ];

@@ -9,6 +9,8 @@ use MarcosBrendon\ApiForge\Exceptions\ModelHookConfigurationException;
 use MarcosBrendon\ApiForge\Support\HookContext;
 use MarcosBrendon\ApiForge\Support\HookRegistry;
 use MarcosBrendon\ApiForge\Support\ModelHookDefinition;
+use MarcosBrendon\ApiForge\Support\ModelHookValidator;
+use MarcosBrendon\ApiForge\Services\RuntimeErrorHandler;
 
 class ModelHookService
 {
@@ -28,13 +30,19 @@ class ModelHookService
     protected bool $throwOnFailure;
 
     /**
+     * Runtime error handler
+     */
+    protected RuntimeErrorHandler $errorHandler;
+
+    /**
      * Create a new model hook service instance
      */
-    public function __construct()
+    public function __construct(RuntimeErrorHandler $errorHandler = null)
     {
         $this->registry = new HookRegistry();
         $this->logExecution = $this->getConfig('apiforge.hooks.log_execution', false);
         $this->throwOnFailure = $this->getConfig('apiforge.hooks.throw_on_failure', true);
+        $this->errorHandler = $errorHandler ?? new RuntimeErrorHandler();
     }
 
     /**
@@ -42,22 +50,60 @@ class ModelHookService
      */
     public function register(string $hookType, string $hookName, $callback, array $options = []): void
     {
-        $definition = new ModelHookDefinition(
-            $hookName,
-            $callback,
-            $options['priority'] ?? 10,
-            $options['stopOnFailure'] ?? false,
-            $options['conditions'] ?? [],
-            $options['description'] ?? ''
-        );
+        try {
+            // Validate hook configuration
+            $hookConfig = array_merge(['callback' => $callback], $options);
+            $errors = ModelHookValidator::validateHookConfig($hookType, $hookName, $hookConfig);
+            
+            if (!empty($errors)) {
+                throw new ModelHookConfigurationException(
+                    "Invalid configuration for hook '{$hookType}.{$hookName}': " . implode(', ', $errors),
+                    ['hook_type' => $hookType, 'hook_name' => $hookName, 'validation_errors' => $errors]
+                );
+            }
 
-        $this->registry->add($hookType, $definition);
+            $definition = new ModelHookDefinition(
+                $hookName,
+                $callback,
+                $options['priority'] ?? 10,
+                $options['stopOnFailure'] ?? false,
+                $options['conditions'] ?? [],
+                $options['description'] ?? ''
+            );
 
-        if ($this->logExecution) {
-            Log::info("Registered hook '{$hookName}' for '{$hookType}'", [
+            $this->registry->add($hookType, $definition);
+
+            if ($this->logExecution) {
+                Log::info("Registered hook '{$hookName}' for '{$hookType}'", [
+                    'hook_type' => $hookType,
+                    'hook_name' => $hookName,
+                    'priority' => $definition->priority,
+                ]);
+            }
+        } catch (ModelHookConfigurationException $e) {
+            if ($this->throwOnFailure) {
+                throw $e;
+            }
+
+            Log::error("Failed to register hook '{$hookType}.{$hookName}' due to configuration error", [
                 'hook_type' => $hookType,
                 'hook_name' => $hookName,
-                'priority' => $definition->priority,
+                'error' => $e->getMessage(),
+                'context' => $e->getContext()
+            ]);
+        } catch (\Exception $e) {
+            if ($this->throwOnFailure) {
+                throw new ModelHookConfigurationException(
+                    "Failed to register hook '{$hookType}.{$hookName}': " . $e->getMessage(),
+                    ['hook_type' => $hookType, 'hook_name' => $hookName, 'original_error' => $e->getMessage()],
+                    $e
+                );
+            }
+
+            Log::error("Failed to register hook '{$hookType}.{$hookName}'", [
+                'hook_type' => $hookType,
+                'hook_name' => $hookName,
+                'error' => $e->getMessage()
             ]);
         }
     }
@@ -110,7 +156,10 @@ class ModelHookService
                 }
 
             } catch (\Exception $e) {
-                $this->handleHookException($hookName, $hookType, $e, $definition);
+                $this->errorHandler->handleHookError($hookType, $hookName, $model, $e, [
+                    'context' => $context->toArray(),
+                    'definition' => $definition->toArray()
+                ]);
 
                 if ($definition->stopOnFailure) {
                     break;
@@ -386,7 +435,69 @@ class ModelHookService
      */
     public function registerFromConfig(array $config): void
     {
-        $this->registry->registerFromConfig($config);
+        try {
+            // Validate entire configuration first
+            $errors = ModelHookValidator::validateConfig($config);
+            
+            if (!empty($errors)) {
+                $errorMessage = "Invalid hook configuration:\n";
+                foreach ($errors as $hookType => $hookErrors) {
+                    if (is_array($hookErrors)) {
+                        foreach ($hookErrors as $hookName => $hookNameErrors) {
+                            if (is_array($hookNameErrors)) {
+                                $errorMessage .= "- {$hookType}.{$hookName}: " . implode(', ', $hookNameErrors) . "\n";
+                            } else {
+                                $errorMessage .= "- {$hookType}.{$hookName}: {$hookNameErrors}\n";
+                            }
+                        }
+                    } else {
+                        $errorMessage .= "- {$hookType}: {$hookErrors}\n";
+                    }
+                }
+
+                throw new ModelHookConfigurationException(
+                    trim($errorMessage),
+                    ['validation_errors' => $errors]
+                );
+            }
+
+            $this->registry->registerFromConfig($config);
+
+            if ($this->logExecution) {
+                $totalHooks = 0;
+                foreach ($config as $hooks) {
+                    if (is_array($hooks)) {
+                        $totalHooks += count($hooks);
+                    }
+                }
+                
+                Log::info("Registered hooks from configuration", [
+                    'total_hooks' => $totalHooks,
+                    'hook_types' => array_keys($config)
+                ]);
+            }
+        } catch (ModelHookConfigurationException $e) {
+            if ($this->throwOnFailure) {
+                throw $e;
+            }
+
+            Log::error("Failed to register hooks from configuration", [
+                'error' => $e->getMessage(),
+                'context' => $e->getContext()
+            ]);
+        } catch (\Exception $e) {
+            if ($this->throwOnFailure) {
+                throw new ModelHookConfigurationException(
+                    "Failed to register hooks from configuration: " . $e->getMessage(),
+                    ['original_error' => $e->getMessage()],
+                    $e
+                );
+            }
+
+            Log::error("Failed to register hooks from configuration", [
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
     /**
@@ -455,28 +566,164 @@ class ModelHookService
         return $result === false || $result === null;
     }
 
+
+
     /**
-     * Handle hook execution exceptions
+     * Validate configuration with detailed error reporting
      */
-    protected function handleHookException(string $hookName, string $hookType, \Exception $e, ModelHookDefinition $definition): void
+    public function validateConfigurationWithDetails(array $config): array
     {
-        $context = [
-            'hook_name' => $hookName,
-            'hook_type' => $hookType,
-            'exception' => $e->getMessage(),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
+        $results = [
+            'valid' => true,
+            'errors' => [],
+            'warnings' => [],
+            'suggestions' => []
         ];
 
-        Log::error("Hook execution failed: {$hookName}", $context);
+        $errors = ModelHookValidator::validateConfig($config);
 
-        if ($this->throwOnFailure) {
-            throw new ModelHookExecutionException(
-                "Hook '{$hookName}' failed during '{$hookType}': " . $e->getMessage(),
-                $context,
-                $e
-            );
+        if (!empty($errors)) {
+            $results['valid'] = false;
+            $results['errors'] = $errors;
+
+            // Generate suggestions based on errors
+            foreach ($errors as $hookType => $hookErrors) {
+                if (is_array($hookErrors)) {
+                    foreach ($hookErrors as $hookName => $hookNameErrors) {
+                        if (is_array($hookNameErrors)) {
+                            foreach ($hookNameErrors as $error) {
+                                if (str_contains($error, 'Invalid hook type')) {
+                                    $results['suggestions'][] = "Use one of the valid hook types: " . 
+                                        implode(', ', ModelHookValidator::getValidHookTypes());
+                                }
+
+                                if (str_contains($error, 'not callable')) {
+                                    $results['suggestions'][] = "For hook '{$hookType}.{$hookName}': Ensure the callback is a valid callable";
+                                }
+
+                                if (str_contains($error, 'Invalid operator')) {
+                                    $results['suggestions'][] = "For hook '{$hookType}.{$hookName}': Use valid condition operators: " . 
+                                        implode(', ', ModelHookValidator::getValidConditionOperators());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+
+        // Add warnings for potential issues
+        foreach ($config as $hookType => $hooks) {
+            if (is_array($hooks)) {
+                foreach ($hooks as $hookName => $hookConfig) {
+                    if (is_array($hookConfig)) {
+                        // Warn about high priority values
+                        if (isset($hookConfig['priority']) && $hookConfig['priority'] > 100) {
+                            $results['warnings'][] = "Hook '{$hookType}.{$hookName}' has very high priority ({$hookConfig['priority']}) - consider using lower values";
+                        }
+
+                        // Warn about complex conditions
+                        if (isset($hookConfig['conditions']) && count($hookConfig['conditions']) > 3) {
+                            $results['warnings'][] = "Hook '{$hookType}.{$hookName}' has many conditions which may impact performance";
+                        }
+
+                        // Warn about missing descriptions
+                        if (empty($hookConfig['description'] ?? '')) {
+                            $results['warnings'][] = "Hook '{$hookType}.{$hookName}' has no description - consider adding one for documentation";
+                        }
+
+                        // Warn about stopOnFailure for non-critical hooks
+                        if (($hookConfig['stopOnFailure'] ?? false) && !ModelHookValidator::supportsStopExecution($hookType)) {
+                            $results['warnings'][] = "Hook '{$hookType}.{$hookName}' has stopOnFailure enabled but hook type doesn't support stopping execution";
+                        }
+                    }
+                }
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Execute hooks with timeout protection
+     */
+    public function executeWithTimeout(string $hookType, $model, Request $request, int $timeoutSeconds = 30, array $data = []): mixed
+    {
+        return $this->errorHandler->executeWithTimeout(
+            fn() => $this->execute($hookType, $model, $request, $data),
+            $timeoutSeconds,
+            ['hook_type' => $hookType, 'model_class' => get_class($model)]
+        );
+    }
+
+    /**
+     * Execute hooks with memory limit protection
+     */
+    public function executeWithMemoryLimit(string $hookType, $model, Request $request, int $memoryLimitMb = 128, array $data = []): mixed
+    {
+        return $this->errorHandler->executeWithMemoryLimit(
+            fn() => $this->execute($hookType, $model, $request, $data),
+            $memoryLimitMb,
+            ['hook_type' => $hookType, 'model_class' => get_class($model)]
+        );
+    }
+
+    /**
+     * Execute hooks with retry logic
+     */
+    public function executeWithRetry(string $hookType, $model, Request $request, array $data = []): mixed
+    {
+        return $this->errorHandler->executeWithRetry(
+            fn() => $this->execute($hookType, $model, $request, $data),
+            ['hook_type' => $hookType, 'model_class' => get_class($model)]
+        );
+    }
+
+    /**
+     * Execute hooks with transaction rollback on failure
+     */
+    public function executeWithTransaction(string $hookType, $model, Request $request, array $data = []): mixed
+    {
+        $originalUseTransactions = $this->getConfig('apiforge.error_handling.use_transactions', true);
+        $this->errorHandler->setUseTransactions(true);
+
+        try {
+            return $this->execute($hookType, $model, $request, $data);
+        } finally {
+            $this->errorHandler->setUseTransactions($originalUseTransactions);
+        }
+    }
+
+    /**
+     * Get error statistics from the error handler
+     */
+    public function getErrorStats(): array
+    {
+        return $this->errorHandler->getErrorStats();
+    }
+
+    /**
+     * Check if hook error rate is high
+     */
+    public function isErrorRateHigh(int $thresholdPerMinute = 10): bool
+    {
+        return $this->errorHandler->isErrorRateHigh($thresholdPerMinute);
+    }
+
+    /**
+     * Reset error statistics
+     */
+    public function resetErrorStats(): void
+    {
+        $this->errorHandler->resetErrorStats();
+    }
+
+    /**
+     * Get the error handler instance
+     */
+    public function getErrorHandler(): RuntimeErrorHandler
+    {
+        return $this->errorHandler;
     }
 
     /**
