@@ -96,21 +96,301 @@ class UserController extends BaseApiController
             ]
         ]);
 
+        // Configure virtual fields for computed data
+        $this->configureVirtualFields([
+            'display_name' => [
+                'type' => 'string',
+                'callback' => function($user) {
+                    return $user->name ?: $user->email;
+                },
+                'dependencies' => ['name', 'email'],
+                'operators' => ['eq', 'like', 'ne'],
+                'searchable' => true,
+                'sortable' => true,
+                'description' => 'Display name (name or email if name is empty)',
+                'example' => [
+                    'eq' => 'display_name=John Doe',
+                    'like' => 'display_name=John*'
+                ]
+            ],
+            
+            'full_name' => [
+                'type' => 'string',
+                'callback' => function($user) {
+                    return trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? ''));
+                },
+                'dependencies' => ['first_name', 'last_name'],
+                'operators' => ['eq', 'like', 'ne'],
+                'searchable' => true,
+                'sortable' => true,
+                'nullable' => true,
+                'description' => 'Full name from first and last name fields'
+            ],
+            
+            'age' => [
+                'type' => 'integer',
+                'callback' => function($user) {
+                    return $user->birth_date ? 
+                        \Carbon\Carbon::parse($user->birth_date)->age : null;
+                },
+                'dependencies' => ['birth_date'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'nullable' => true,
+                'sortable' => true,
+                'description' => 'Calculated age from birth date',
+                'example' => [
+                    'gte' => 'age=>=18',
+                    'between' => 'age=18|65'
+                ]
+            ],
+            
+            'account_age_days' => [
+                'type' => 'integer',
+                'callback' => function($user) {
+                    return $user->created_at ? 
+                        $user->created_at->diffInDays(now()) : 0;
+                },
+                'dependencies' => ['created_at'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'description' => 'Days since account creation',
+                'example' => [
+                    'gte' => 'account_age_days=>=30',
+                    'lt' => 'account_age_days=<365'
+                ]
+            ],
+            
+            'is_verified' => [
+                'type' => 'boolean',
+                'callback' => function($user) {
+                    return !is_null($user->email_verified_at);
+                },
+                'dependencies' => ['email_verified_at'],
+                'operators' => ['eq'],
+                'description' => 'Whether user email is verified',
+                'example' => [
+                    'eq' => 'is_verified=true'
+                ]
+            ],
+            
+            'order_count' => [
+                'type' => 'integer',
+                'callback' => function($user) {
+                    return $user->orders_count ?? $user->orders()->count();
+                },
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 1800, // 30 minutes
+                'description' => 'Total number of orders placed by user',
+                'example' => [
+                    'gt' => 'order_count=>5',
+                    'between' => 'order_count=1|10'
+                ]
+            ],
+            
+            'total_spent' => [
+                'type' => 'float',
+                'callback' => function($user) {
+                    return $user->orders()->sum('total') ?: 0.0;
+                },
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 3600, // 1 hour
+                'default_value' => 0.0,
+                'description' => 'Total amount spent by user across all orders',
+                'example' => [
+                    'gte' => 'total_spent=>=1000.00',
+                    'between' => 'total_spent=100.00|5000.00'
+                ]
+            ],
+            
+            'average_order_value' => [
+                'type' => 'float',
+                'callback' => function($user) {
+                    $orderCount = $user->orders()->count();
+                    if ($orderCount === 0) return 0.0;
+                    
+                    $totalSpent = $user->orders()->sum('total');
+                    return round($totalSpent / $orderCount, 2);
+                },
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 3600,
+                'default_value' => 0.0,
+                'description' => 'Average value per order',
+                'example' => [
+                    'gte' => 'average_order_value=>=50.00'
+                ]
+            ],
+            
+            'customer_tier' => [
+                'type' => 'enum',
+                'values' => ['bronze', 'silver', 'gold', 'platinum'],
+                'callback' => [$this, 'calculateCustomerTier'],
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'in', 'ne'],
+                'sortable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 3600,
+                'default_value' => 'bronze',
+                'description' => 'Customer tier based on total spending',
+                'example' => [
+                    'eq' => 'customer_tier=gold',
+                    'in' => 'customer_tier=gold,platinum'
+                ]
+            ],
+            
+            'last_order_date' => [
+                'type' => 'datetime',
+                'callback' => function($user) {
+                    $lastOrder = $user->orders()->latest()->first();
+                    return $lastOrder ? $lastOrder->created_at : null;
+                },
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'gte', 'lte', 'between', 'null', 'not_null'],
+                'sortable' => true,
+                'nullable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 1800,
+                'description' => 'Date of most recent order',
+                'example' => [
+                    'gte' => 'last_order_date=>=2024-01-01',
+                    'null' => 'last_order_date=null'
+                ]
+            ],
+            
+            'days_since_last_order' => [
+                'type' => 'integer',
+                'callback' => function($user) {
+                    $lastOrder = $user->orders()->latest()->first();
+                    return $lastOrder ? 
+                        $lastOrder->created_at->diffInDays(now()) : null;
+                },
+                'relationships' => ['orders'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between', 'null'],
+                'sortable' => true,
+                'nullable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 1800,
+                'description' => 'Days since last order was placed',
+                'example' => [
+                    'gt' => 'days_since_last_order=>30',
+                    'null' => 'days_since_last_order=null'
+                ]
+            ],
+            
+            'is_premium' => [
+                'type' => 'boolean',
+                'callback' => function($user) {
+                    return $user->subscriptions()
+                        ->where('status', 'active')
+                        ->where('type', 'premium')
+                        ->exists();
+                },
+                'relationships' => ['subscriptions'],
+                'operators' => ['eq'],
+                'cacheable' => true,
+                'cache_ttl' => 900, // 15 minutes
+                'description' => 'Whether user has active premium subscription',
+                'example' => [
+                    'eq' => 'is_premium=true'
+                ]
+            ],
+            
+            'subscription_status' => [
+                'type' => 'enum',
+                'values' => ['none', 'trial', 'active', 'expired', 'cancelled'],
+                'callback' => function($user) {
+                    $subscription = $user->subscriptions()->latest()->first();
+                    return $subscription ? $subscription->status : 'none';
+                },
+                'relationships' => ['subscriptions'],
+                'operators' => ['eq', 'in', 'ne'],
+                'cacheable' => true,
+                'cache_ttl' => 900,
+                'default_value' => 'none',
+                'description' => 'Current subscription status',
+                'example' => [
+                    'eq' => 'subscription_status=active',
+                    'in' => 'subscription_status=active,trial'
+                ]
+            ],
+            
+            'profile_completion' => [
+                'type' => 'integer',
+                'callback' => function($user) {
+                    $fields = ['name', 'email', 'phone', 'birth_date', 'avatar'];
+                    $completed = 0;
+                    
+                    foreach ($fields as $field) {
+                        if ($field === 'avatar') {
+                            if ($user->profile && $user->profile->avatar) $completed++;
+                        } elseif ($field === 'phone') {
+                            if ($user->profile && $user->profile->phone) $completed++;
+                        } else {
+                            if (!empty($user->$field)) $completed++;
+                        }
+                    }
+                    
+                    return round(($completed / count($fields)) * 100);
+                },
+                'dependencies' => ['name', 'email', 'birth_date'],
+                'relationships' => ['profile'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'description' => 'Profile completion percentage (0-100)',
+                'example' => [
+                    'gte' => 'profile_completion=>=80',
+                    'lt' => 'profile_completion=<50'
+                ]
+            ],
+            
+            'risk_score' => [
+                'type' => 'integer',
+                'callback' => [$this, 'calculateRiskScore'],
+                'relationships' => ['orders', 'loginAttempts', 'reports'],
+                'operators' => ['eq', 'gt', 'gte', 'lt', 'lte', 'between'],
+                'sortable' => true,
+                'cacheable' => true,
+                'cache_ttl' => 1800,
+                'default_value' => 0,
+                'description' => 'User risk score based on various factors (0-100)',
+                'example' => [
+                    'gt' => 'risk_score=>50',
+                    'lte' => 'risk_score=<=25'
+                ]
+            ]
+        ]);
+
         // Configure field selection
         $this->configureFieldSelection([
             'selectable_fields' => [
                 'id', 'name', 'email', 'email_verified_at', 
                 'active', 'role', 'created_at', 'updated_at',
-                'profile.avatar', 'profile.bio', 'profile.phone'
+                'profile.avatar', 'profile.bio', 'profile.phone',
+                // Virtual fields
+                'display_name', 'full_name', 'age', 'account_age_days',
+                'is_verified', 'order_count', 'total_spent', 'average_order_value',
+                'customer_tier', 'last_order_date', 'days_since_last_order',
+                'is_premium', 'subscription_status', 'profile_completion', 'risk_score'
             ],
             'required_fields' => ['id'],
             'blocked_fields' => ['password', 'remember_token', 'two_factor_secret'],
-            'default_fields' => ['id', 'name', 'email', 'active', 'role'],
+            'default_fields' => ['id', 'name', 'email', 'active', 'role', 'display_name'],
             'field_aliases' => [
                 'user_id' => 'id',
                 'user_name' => 'name',
                 'user_email' => 'email',
-                'username' => 'name'
+                'username' => 'name',
+                'tier' => 'customer_tier',
+                'orders' => 'order_count',
+                'spent' => 'total_spent'
             ],
             'max_fields' => 25
         ]);
@@ -464,6 +744,213 @@ class UserController extends BaseApiController
      */
     protected function getQuickSearchFields(): array
     {
-        return ['id', 'name', 'email', 'role'];
+        return ['id', 'name', 'email', 'role', 'display_name'];
+    }
+
+    /**
+     * Calculate customer tier based on total spending
+     *
+     * @param \App\Models\User $user
+     * @return string
+     */
+    public function calculateCustomerTier($user): string
+    {
+        $totalSpent = $user->orders()->sum('total') ?: 0;
+        
+        if ($totalSpent >= 10000) {
+            return 'platinum';
+        } elseif ($totalSpent >= 5000) {
+            return 'gold';
+        } elseif ($totalSpent >= 1000) {
+            return 'silver';
+        }
+        
+        return 'bronze';
+    }
+
+    /**
+     * Calculate user risk score based on various factors
+     *
+     * @param \App\Models\User $user
+     * @return int Risk score from 0-100
+     */
+    public function calculateRiskScore($user): int
+    {
+        $score = 0;
+        
+        // Account age factor (newer accounts are riskier)
+        $accountAgeDays = $user->created_at->diffInDays(now());
+        if ($accountAgeDays < 30) {
+            $score += 20;
+        } elseif ($accountAgeDays < 90) {
+            $score += 10;
+        }
+        
+        // Email verification factor
+        if (!$user->email_verified_at) {
+            $score += 15;
+        }
+        
+        // Order behavior factor
+        $orderCount = $user->orders()->count();
+        $totalSpent = $user->orders()->sum('total');
+        
+        if ($orderCount > 0) {
+            $avgOrderValue = $totalSpent / $orderCount;
+            
+            // Unusually high order values can be risky
+            if ($avgOrderValue > 1000) {
+                $score += 10;
+            }
+            
+            // Too many orders in short time
+            $recentOrders = $user->orders()->where('created_at', '>=', now()->subDays(7))->count();
+            if ($recentOrders > 10) {
+                $score += 15;
+            }
+        } else {
+            // No orders might indicate fake account
+            if ($accountAgeDays > 30) {
+                $score += 10;
+            }
+        }
+        
+        // Failed login attempts
+        $failedLogins = $user->loginAttempts()
+            ->where('successful', false)
+            ->where('created_at', '>=', now()->subDays(30))
+            ->count();
+        
+        if ($failedLogins > 10) {
+            $score += 20;
+        } elseif ($failedLogins > 5) {
+            $score += 10;
+        }
+        
+        // User reports/complaints
+        $reportCount = $user->reports()->where('status', 'open')->count();
+        $score += min($reportCount * 5, 25); // Max 25 points from reports
+        
+        // Profile completion (incomplete profiles are riskier)
+        $profileFields = ['name', 'phone', 'birth_date'];
+        $completedFields = 0;
+        
+        foreach ($profileFields as $field) {
+            if ($field === 'phone') {
+                if ($user->profile && $user->profile->phone) $completedFields++;
+            } else {
+                if (!empty($user->$field)) $completedFields++;
+            }
+        }
+        
+        $completionRate = $completedFields / count($profileFields);
+        if ($completionRate < 0.5) {
+            $score += 10;
+        }
+        
+        return min($score, 100); // Cap at 100
+    }
+
+    /**
+     * Example of using virtual fields in custom endpoints
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function customerAnalytics(Request $request)
+    {
+        // Use virtual fields in custom analytics
+        $users = $this->getFilteredQuery($request)
+            ->get()
+            ->map(function ($user) {
+                return [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'customer_tier' => $this->calculateCustomerTier($user),
+                    'total_spent' => $user->orders()->sum('total'),
+                    'order_count' => $user->orders()->count(),
+                    'risk_score' => $this->calculateRiskScore($user),
+                    'profile_completion' => $this->calculateProfileCompletion($user)
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $users,
+            'analytics' => [
+                'tier_distribution' => $users->groupBy('customer_tier')->map->count(),
+                'avg_risk_score' => $users->avg('risk_score'),
+                'high_risk_users' => $users->where('risk_score', '>', 70)->count(),
+                'incomplete_profiles' => $users->where('profile_completion', '<', 80)->count()
+            ]
+        ]);
+    }
+
+    /**
+     * Helper method for profile completion calculation
+     *
+     * @param \App\Models\User $user
+     * @return int
+     */
+    private function calculateProfileCompletion($user): int
+    {
+        $fields = ['name', 'email', 'phone', 'birth_date', 'avatar'];
+        $completed = 0;
+        
+        foreach ($fields as $field) {
+            if ($field === 'avatar') {
+                if ($user->profile && $user->profile->avatar) $completed++;
+            } elseif ($field === 'phone') {
+                if ($user->profile && $user->profile->phone) $completed++;
+            } else {
+                if (!empty($user->$field)) $completed++;
+            }
+        }
+        
+        return round(($completed / count($fields)) * 100);
+    }
+
+    /**
+     * Example of complex filtering with virtual fields
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function premiumCustomers(Request $request)
+    {
+        // Pre-filter for premium customers using virtual fields
+        $request->merge([
+            'customer_tier' => 'gold,platinum',
+            'is_premium' => 'true',
+            'total_spent' => '>=1000',
+            'fields' => 'id,name,email,customer_tier,total_spent,order_count,is_premium'
+        ]);
+
+        return $this->indexWithFilters($request, [
+            'cache' => true,
+            'cache_ttl' => 1800,
+            'cache_tags' => ['users', 'premium']
+        ]);
+    }
+
+    /**
+     * Example of risk assessment endpoint
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function riskAssessment(Request $request)
+    {
+        $request->merge([
+            'risk_score' => '>=50',
+            'sort_by' => 'risk_score',
+            'sort_direction' => 'desc',
+            'fields' => 'id,name,email,risk_score,account_age_days,is_verified,order_count'
+        ]);
+
+        return $this->indexWithFilters($request, [
+            'per_page' => 50,
+            'cache' => false // Don't cache risk data
+        ]);
     }
 }
