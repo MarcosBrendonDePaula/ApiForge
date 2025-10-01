@@ -1492,19 +1492,14 @@ trait HasAdvancedFilters
             // Fill model with data
             $model->fill($data);
             
-            // Create hook context
-            $context = new \stdClass();
-            $context->request = $request;
-            $context->operation = 'store';
-            
             // Execute beforeStore hooks
-            $model = $this->hookService->execute('beforeStore', $model, $context);
+            $this->hookService->executeBeforeStore($model, $request);
             
             // Save the model
             $model->save();
             
             // Execute afterStore hooks
-            $model = $this->hookService->execute('afterStore', $model, $context);
+            $this->hookService->executeAfterStore($model, $request);
             
             return response()->json([
                 'success' => true,
@@ -1545,20 +1540,14 @@ trait HasAdvancedFilters
             // Fill model with new data
             $model->fill($data);
             
-            // Create hook context
-            $context = new \stdClass();
-            $context->request = $request;
-            $context->operation = 'update';
-            $context->originalModel = $originalModel;
-            
             // Execute beforeUpdate hooks
-            $model = $this->hookService->execute('beforeUpdate', $model, $context);
+            $this->hookService->executeBeforeUpdate($model, $request, $data);
             
             // Save the model
             $model->save();
             
             // Execute afterUpdate hooks
-            $model = $this->hookService->execute('afterUpdate', $model, $context);
+            $this->hookService->executeAfterUpdate($model, $request, $data);
             
             return response()->json([
                 'success' => true,
@@ -1592,19 +1581,24 @@ trait HasAdvancedFilters
             $modelClass = $this->getModelClass();
             $model = $modelClass::findOrFail($id);
             
-            // Create hook context
-            $context = new \stdClass();
-            $context->request = $request;
-            $context->operation = 'delete';
-            
             // Execute beforeDelete hooks
-            $this->hookService->execute('beforeDelete', $model, $context);
+            $canDelete = $this->hookService->executeBeforeDelete($model, $request);
+            
+            if (!$canDelete) {
+                return response()->json([
+                    'success' => false,
+                    'error' => [
+                        'message' => 'Delete operation was prevented by hooks',
+                        'type' => 'HookPreventedException'
+                    ]
+                ], 403);
+            }
             
             // Delete the model
             $model->delete();
             
             // Execute afterDelete hooks
-            $this->hookService->execute('afterDelete', $model, $context);
+            $this->hookService->executeAfterDelete($model, $request);
             
             return response()->json([
                 'success' => true,
