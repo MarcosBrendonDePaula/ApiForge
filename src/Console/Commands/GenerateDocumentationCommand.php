@@ -503,10 +503,8 @@ class GenerateDocumentationCommand extends Command
         
         // Start the callback in a way that allows us to show progress
         // In a real implementation, you might want to use a proper async approach
-        $result = $callback();
+        $callback();
         
         $this->output->writeln('✅');
-        
-        return $result;
     }
 }

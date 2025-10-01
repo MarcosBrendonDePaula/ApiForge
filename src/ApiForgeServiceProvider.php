@@ -7,7 +7,11 @@ use MarcosBrendon\ApiForge\Http\Middleware\ApiPaginationMiddleware;
 use MarcosBrendon\ApiForge\Services\ApiFilterService;
 use MarcosBrendon\ApiForge\Services\FilterConfigService;
 use MarcosBrendon\ApiForge\Services\DocumentationGeneratorService;
+use MarcosBrendon\ApiForge\Services\CacheService;
+use MarcosBrendon\ApiForge\Services\QueryOptimizationService;
 use MarcosBrendon\ApiForge\Console\Commands\GenerateDocumentationCommand;
+use MarcosBrendon\ApiForge\Console\Commands\CacheManagementCommand;
+use MarcosBrendon\ApiForge\Console\Commands\PerformanceAnalysisCommand;
 
 class ApiForgeServiceProvider extends ServiceProvider
 {
@@ -28,6 +32,8 @@ class ApiForgeServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 GenerateDocumentationCommand::class,
+                CacheManagementCommand::class,
+                PerformanceAnalysisCommand::class,
             ]);
         }
 
@@ -60,10 +66,20 @@ class ApiForgeServiceProvider extends ServiceProvider
             return new DocumentationGeneratorService($app->make(FilterConfigService::class));
         });
 
+        $this->app->singleton(CacheService::class, function ($app) {
+            return new CacheService();
+        });
+
+        $this->app->singleton(QueryOptimizationService::class, function ($app) {
+            return new QueryOptimizationService();
+        });
+
         // Register aliases
         $this->app->alias(ApiFilterService::class, 'api-filter-service');
         $this->app->alias(FilterConfigService::class, 'filter-config-service');
         $this->app->alias(DocumentationGeneratorService::class, 'documentation-generator-service');
+        $this->app->alias(CacheService::class, 'cache-service');
+        $this->app->alias(QueryOptimizationService::class, 'query-optimization-service');
     }
 
     /**
@@ -77,9 +93,13 @@ class ApiForgeServiceProvider extends ServiceProvider
             ApiFilterService::class,
             FilterConfigService::class,
             DocumentationGeneratorService::class,
+            CacheService::class,
+            QueryOptimizationService::class,
             'api-filter-service',
             'filter-config-service',
             'documentation-generator-service',
+            'cache-service',
+            'query-optimization-service',
         ];
     }
 }

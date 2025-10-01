@@ -8,35 +8,73 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use MarcosBrendon\ApiForge\Services\ApiFilterService;
 use MarcosBrendon\ApiForge\Services\FilterConfigService;
+use MarcosBrendon\ApiForge\Services\CacheService;
+use MarcosBrendon\ApiForge\Services\QueryOptimizationService;
+use MarcosBrendon\ApiForge\Services\ModelHookService;
 use MarcosBrendon\ApiForge\Http\Resources\PaginatedResource;
+use MarcosBrendon\ApiForge\Exceptions\FilterValidationException;
+use MarcosBrendon\ApiForge\Support\ExceptionHandler;
 
 trait HasAdvancedFilters
 {
     /**
      * Serviço de filtros
      *
-     * @var ApiFilterService
+     * @var ApiFilterService|null
      */
-    protected ApiFilterService $filterService;
+    protected ?ApiFilterService $filterService = null;
 
     /**
      * Configuração avançada de filtros
      *
-     * @var FilterConfigService
+     * @var FilterConfigService|null
      */
-    protected FilterConfigService $filterConfigService;
+    protected ?FilterConfigService $filterConfigService = null;
+
+    /**
+     * Serviço de cache
+     *
+     * @var CacheService|null
+     */
+    protected ?CacheService $cacheService = null;
+
+    /**
+     * Serviço de otimização de queries
+     *
+     * @var QueryOptimizationService|null
+     */
+    protected ?QueryOptimizationService $queryOptimizationService = null;
+
+    /**
+     * Serviço de hooks de modelo
+     *
+     * @var ModelHookService|null
+     */
+    protected ?ModelHookService $hookService = null;
 
     /**
      * Inicializar serviços de filtro
      */
     protected function initializeFilterServices(): void
     {
-        if (!isset($this->filterService)) {
+        if ($this->filterService === null) {
             $this->filterService = app(ApiFilterService::class);
         }
 
-        if (!isset($this->filterConfigService)) {
+        if ($this->filterConfigService === null) {
             $this->filterConfigService = app(FilterConfigService::class);
+        }
+
+        if ($this->cacheService === null) {
+            $this->cacheService = app(CacheService::class);
+        }
+
+        if ($this->queryOptimizationService === null) {
+            $this->queryOptimizationService = app(QueryOptimizationService::class);
+        }
+
+        if ($this->hookService === null) {
+            $this->hookService = app(ModelHookService::class);
         }
 
         // Configurar filtros se o método existir
@@ -54,39 +92,42 @@ trait HasAdvancedFilters
      */
     public function indexWithFilters(Request $request, array $options = []): JsonResponse
     {
-        $this->initializeFilterServices();
+        try {
+            $this->initializeFilterServices();
 
-        // Passar configuração de filtros para o middleware
-        $request->attributes->set('filter_config', $this->filterConfigService->getFilterMetadata());
+            // Passar configuração de filtros para o middleware
+            $request->attributes->set('filter_config', $this->filterConfigService->getFilterMetadata());
 
-        // Validar filtros obrigatórios
-        $missingFilters = $this->filterConfigService->validateRequiredFilters($request);
-        if (!empty($missingFilters)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Filtros obrigatórios ausentes',
-                'missing_filters' => $missingFilters
-            ], 400);
+            // Validar filtros obrigatórios
+            $missingFilters = $this->filterConfigService->validateRequiredFilters($request);
+            if (!empty($missingFilters)) {
+                $exception = FilterValidationException::requiredFilterMissing($missingFilters);
+                return ExceptionHandler::handle($exception, $request);
+            }
+
+            // Criar query base
+            $query = $this->buildBaseQuery($request, $options);
+
+            // Aplicar filtros avançados
+            $this->filterService->applyAdvancedFilters($query, $request);
+
+            // Obter campos pesquisáveis e ordenáveis da configuração
+            $searchableFields = $this->filterConfigService->getSearchableFields();
+            $sortableFields = $this->filterConfigService->getSortableFields();
+
+            // Aplicar paginação com field selection automático
+            $result = $this->paginateQueryWithAutoFieldSelection(
+                $query,
+                $request,
+                $searchableFields,
+                $sortableFields,
+                $options['per_page'] ?? config('apiforge.pagination.default_per_page', 15)
+            );
+        } catch (\MarcosBrendon\ApiForge\Exceptions\ApiForgeException $e) {
+            return ExceptionHandler::handle($e, $request);
+        } catch (\Throwable $e) {
+            return ExceptionHandler::handleGeneric($e, $request);
         }
-
-        // Criar query base
-        $query = $this->buildBaseQuery($request, $options);
-
-        // Aplicar filtros avançados
-        $this->filterService->applyAdvancedFilters($query, $request);
-
-        // Obter campos pesquisáveis e ordenáveis da configuração
-        $searchableFields = $this->filterConfigService->getSearchableFields();
-        $sortableFields = $this->filterConfigService->getSortableFields();
-
-        // Aplicar paginação com field selection automático
-        $result = $this->paginateQueryWithAutoFieldSelection(
-            $query,
-            $request,
-            $searchableFields,
-            $sortableFields,
-            $options['per_page'] ?? config('apiforge.pagination.default_per_page', 15)
-        );
 
         // Adicionar informações sobre filtros inválidos se houver
         $additionalData = [
@@ -103,18 +144,42 @@ trait HasAdvancedFilters
             ];
         }
 
-        // Aplicar cache se configurado
-        if ($options['cache'] ?? false) {
-            $cacheKey = $this->generateCacheKey($request, $options);
-            $cacheTtl = $options['cache_ttl'] ?? config('apiforge.cache.default_ttl', 3600);
+        // Aplicar cache avançado se configurado
+        if (($options['cache'] ?? false) || config('apiforge.cache.enabled', false)) {
+            $cacheKey = $this->cacheService->generateKey(
+                $this->getModelClass(),
+                $request->all(),
+                $options
+            );
             
-            return cache()->remember($cacheKey, $cacheTtl, function () use ($result, $additionalData) {
-                return response()->json(
-                    (new PaginatedResource($result['data']))
-                        ->withFilterMetadata($this->filterConfigService->getFilterMetadata())
-                        ->additional($additionalData)
-                );
-            });
+            // Tentar recuperar do cache primeiro
+            $cachedResponse = $this->cacheService->retrieve($cacheKey);
+            
+            if ($cachedResponse !== null) {
+                return $cachedResponse;
+            }
+            
+            // Gerar resposta se não estiver em cache
+            $response = response()->json(
+                (new PaginatedResource($result['data']))
+                    ->withFilterMetadata($this->filterConfigService->getFilterMetadata())
+                    ->additional($additionalData)
+            );
+            
+            // Armazenar no cache com tags e metadados
+            $cacheOptions = [
+                'ttl' => $options['cache_ttl'] ?? config('apiforge.cache.default_ttl', 3600),
+                'tags' => array_merge(
+                    $options['cache_tags'] ?? [],
+                    ['api_response']
+                ),
+                'model' => $this->getModelClass(),
+                'query_params' => $request->all()
+            ];
+            
+            $this->cacheService->store($cacheKey, $response, $cacheOptions);
+            
+            return $response;
         }
 
         // Retornar resposta usando Resource
@@ -163,6 +228,14 @@ trait HasAdvancedFilters
         array $sortableFields = [],
         int $defaultPerPage = 15
     ): array {
+        // Obter campos solicitados para otimização
+        $fieldsParam = $request->get('fields');
+        $requestedFields = $fieldsParam ? array_map('trim', explode(',', $fieldsParam)) : [];
+        
+        // Aplicar otimizações de query se habilitado
+        if (config('apiforge.performance.query_optimization', true)) {
+            $query = $this->queryOptimizationService->optimizeQuery($query, $requestedFields);
+        }
         // Aplicar busca geral
         $searchTerm = $request->get('search');
         if ($searchTerm && !empty($searchableFields)) {
@@ -192,7 +265,7 @@ trait HasAdvancedFilters
         // Aplicar field selection
         $this->applyFieldSelection($query, $request);
 
-        // Paginação
+        // Paginação otimizada
         $perPage = min(
             config('apiforge.pagination.max_per_page', 100),
             max(
@@ -200,6 +273,13 @@ trait HasAdvancedFilters
                 (int) $request->get('per_page', $defaultPerPage)
             )
         );
+        
+        $page = (int) $request->get('page', 1);
+        
+        // Aplicar otimização de paginação para grandes datasets
+        if (config('apiforge.performance.optimize_pagination', true)) {
+            $query = $this->queryOptimizationService->optimizePagination($query, $page, $perPage);
+        }
 
         $paginated = $query->paginate($perPage);
 
@@ -325,28 +405,6 @@ trait HasAdvancedFilters
         ];
     }
 
-    /**
-     * Gerar chave de cache
-     *
-     * @param Request $request
-     * @param array $options
-     * @return string
-     */
-    protected function generateCacheKey(Request $request, array $options = []): string
-    {
-        $params = $request->except(['_token']);
-        ksort($params);
-        
-        $keyData = [
-            'model' => $this->getModelClass(),
-            'params' => $params,
-            'url' => $request->url(),
-            'options' => $options
-        ];
-        
-        $prefix = config('apiforge.cache.key_prefix', 'api_filters_');
-        return $prefix . md5(json_encode($keyData));
-    }
 
     /**
      * Configurar filtros (deve ser implementado pela classe que usa o trait)

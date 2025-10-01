@@ -8,6 +8,8 @@ use Illuminate\Foundation\Validation\ValidatesRequests;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use MarcosBrendon\ApiForge\Traits\HasAdvancedFilters;
 
 abstract class BaseApiController extends Controller
@@ -81,21 +83,57 @@ abstract class BaseApiController extends Controller
         }
 
         $modelClass = $this->getModelClass();
-        $resource = $modelClass::create($validatedData);
+        
+        try {
+            DB::beginTransaction();
 
-        // Carregar relacionamentos se necessário
-        if (method_exists($this, 'getDefaultRelationships')) {
-            $relationships = $this->getDefaultRelationships();
-            if (!empty($relationships)) {
-                $resource->load($relationships);
+            // Criar instância temporária do modelo para hooks beforeStore
+            $resource = new $modelClass($validatedData);
+
+            // Executar hooks beforeStore
+            if ($this->hookService && $this->hookService->hasHook('beforeStore')) {
+                $this->hookService->executeBeforeStore($resource, $request);
             }
-        }
 
-        return response()->json([
-            'success' => true,
-            'data' => $resource,
-            'message' => 'Recurso criado com sucesso'
-        ], 201);
+            // Criar o recurso no banco de dados
+            $resource = $modelClass::create($validatedData);
+
+            // Executar hooks afterStore
+            if ($this->hookService && $this->hookService->hasHook('afterStore')) {
+                $this->hookService->executeAfterStore($resource, $request);
+            }
+
+            // Carregar relacionamentos se necessário
+            if (method_exists($this, 'getDefaultRelationships')) {
+                $relationships = $this->getDefaultRelationships();
+                if (!empty($relationships)) {
+                    $resource->load($relationships);
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'data' => $resource,
+                'message' => 'Recurso criado com sucesso'
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            // Log the error
+            Log::error('Error creating resource in store method', [
+                'exception' => $e->getMessage(),
+                'model_class' => $modelClass,
+                'data' => $validatedData
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao criar recurso: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -120,21 +158,67 @@ abstract class BaseApiController extends Controller
             $validatedData = $this->transformUpdateData($validatedData, $request, $resource);
         }
 
-        $resource->update($validatedData);
+        try {
+            DB::beginTransaction();
 
-        // Carregar relacionamentos se necessário
-        if (method_exists($this, 'getDefaultRelationships')) {
-            $relationships = $this->getDefaultRelationships();
-            if (!empty($relationships)) {
-                $resource->load($relationships);
+            // Capturar dados originais para o contexto
+            $originalData = $resource->getOriginal();
+
+            // Executar hooks beforeUpdate
+            if ($this->hookService && $this->hookService->hasHook('beforeUpdate')) {
+                $hookData = [
+                    'original' => $originalData,
+                    'updated' => $validatedData,
+                    'changes' => array_diff_assoc($validatedData, $originalData)
+                ];
+                $this->hookService->executeBeforeUpdate($resource, $request, $hookData);
             }
-        }
 
-        return response()->json([
-            'success' => true,
-            'data' => $resource,
-            'message' => 'Recurso atualizado com sucesso'
-        ]);
+            // Atualizar o recurso
+            $resource->update($validatedData);
+
+            // Executar hooks afterUpdate
+            if ($this->hookService && $this->hookService->hasHook('afterUpdate')) {
+                $hookData = [
+                    'original' => $originalData,
+                    'updated' => $resource->toArray(),
+                    'changes' => $resource->getChanges()
+                ];
+                $this->hookService->executeAfterUpdate($resource, $request, $hookData);
+            }
+
+            // Carregar relacionamentos se necessário
+            if (method_exists($this, 'getDefaultRelationships')) {
+                $relationships = $this->getDefaultRelationships();
+                if (!empty($relationships)) {
+                    $resource->load($relationships);
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'data' => $resource,
+                'message' => 'Recurso atualizado com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            // Log the error
+            Log::error('Error updating resource in update method', [
+                'exception' => $e->getMessage(),
+                'model_class' => $modelClass,
+                'model_id' => $id,
+                'data' => $validatedData
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao atualizar recurso: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -162,15 +246,59 @@ abstract class BaseApiController extends Controller
             }
         }
 
-        // Aplicar soft delete se disponível, senão delete permanente
-        if (method_exists($resource, 'delete')) {
-            $resource->delete();
-        }
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Recurso removido com sucesso'
-        ]);
+            // Executar hooks beforeDelete
+            if ($this->hookService && $this->hookService->hasHook('beforeDelete')) {
+                $canDelete = $this->hookService->executeBeforeDelete($resource, $request);
+                if (!$canDelete) {
+                    DB::rollBack();
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'A remoção foi impedida por regras de negócio'
+                    ], 422);
+                }
+            }
+
+            // Capturar dados do recurso antes da exclusão para hooks afterDelete
+            $resourceData = $resource->toArray();
+
+            // Aplicar soft delete se disponível, senão delete permanente
+            if (method_exists($resource, 'delete')) {
+                $resource->delete();
+            }
+
+            // Executar hooks afterDelete
+            if ($this->hookService && $this->hookService->hasHook('afterDelete')) {
+                // Criar uma cópia do modelo com os dados originais para o hook
+                $deletedResource = new $modelClass($resourceData);
+                $deletedResource->setAttribute($resource->getKeyName(), $id);
+                $this->hookService->executeAfterDelete($deletedResource, $request);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Recurso removido com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            // Log the error
+            Log::error('Error deleting resource in destroy method', [
+                'exception' => $e->getMessage(),
+                'model_class' => $modelClass,
+                'model_id' => $id
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao remover recurso: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**

@@ -237,4 +237,38 @@ return [
             'security_definitions' => true,
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Performance Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for performance optimization features.
+    |
+    */
+    'performance' => [
+        'query_optimization' => env('APIFORGE_QUERY_OPTIMIZATION', true),
+        'optimize_pagination' => env('APIFORGE_OPTIMIZE_PAGINATION', true),
+        'eager_loading' => env('APIFORGE_EAGER_LOADING', true),
+        'n_plus_one_detection' => env('APIFORGE_N_PLUS_ONE_DETECTION', false),
+        
+        'query_limits' => [
+            'max_joins' => 5,
+            'max_where_conditions' => 20,
+            'max_relationships_depth' => 3,
+            'cursor_pagination_threshold' => 100, // pages
+        ],
+        
+        'indexing_hints' => [
+            'suggest_indexes' => env('APIFORGE_SUGGEST_INDEXES', false),
+            'log_slow_queries' => env('APIFORGE_LOG_SLOW_QUERIES', true),
+            'slow_query_threshold' => 100, // ms
+        ],
+        
+        'memory_management' => [
+            'chunk_size' => 1000,
+            'max_memory_usage' => '256M',
+            'gc_probability' => 10, // percentage
+        ],
+    ],
 ];
