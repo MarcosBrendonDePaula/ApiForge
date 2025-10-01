@@ -271,4 +271,33 @@ return [
             'gc_probability' => 10, // percentage
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Virtual Fields Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure virtual field behavior including caching, performance limits,
+    | and sorting constraints.
+    |
+    */
+    'virtual_fields' => [
+        'enabled' => true,
+        'cache_enabled' => true,
+        'default_cache_ttl' => 3600, // seconds
+        'log_operations' => env('APIFORGE_LOG_VIRTUAL_FIELDS', false),
+        'throw_on_failure' => true,
+        
+        // Performance limits
+        'memory_limit' => 128, // MB
+        'time_limit' => 30, // seconds
+        'max_sort_records' => 10000, // Maximum records for virtual field sorting
+        'batch_size' => 100, // Batch size for processing large datasets
+        
+        // Sorting configuration
+        'allow_sorting' => true,
+        'sort_fallback_enabled' => true, // Fall back to regular sorting if virtual field sorting fails
+        'sort_cache_enabled' => true, // Cache sorted results
+        'sort_cache_ttl' => 1800, // seconds
+    ],
 ];

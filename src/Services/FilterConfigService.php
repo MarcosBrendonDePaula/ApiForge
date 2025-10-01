@@ -3,6 +3,7 @@
 namespace MarcosBrendon\ApiForge\Services;
 
 use Illuminate\Http\Request;
+use MarcosBrendon\ApiForge\Services\VirtualFieldService;
 
 class FilterConfigService
 {
@@ -19,6 +20,13 @@ class FilterConfigService
      * @var array
      */
     protected array $enabledFilters = [];
+
+    /**
+     * Virtual field service instance
+     *
+     * @var VirtualFieldService|null
+     */
+    protected ?VirtualFieldService $virtualFieldService = null;
 
     /**
      * Configuração de seleção de campos
@@ -238,6 +246,162 @@ class FilterConfigService
     }
 
     /**
+     * Set the virtual field service
+     *
+     * @param VirtualFieldService $service
+     * @return self
+     */
+    public function setVirtualFieldService(VirtualFieldService $service): self
+    {
+        $this->virtualFieldService = $service;
+        return $this;
+    }
+
+    /**
+     * Configure virtual fields
+     *
+     * @param array $config
+     * @return self
+     */
+    public function configureVirtualFields(array $config): self
+    {
+        if (!$this->virtualFieldService) {
+            throw new \RuntimeException('Virtual field service must be set before configuring virtual fields');
+        }
+
+        // Register virtual fields with the service
+        $this->virtualFieldService->registerFromConfig($config);
+
+        // Add virtual fields to filter configuration
+        foreach ($config as $fieldName => $fieldConfig) {
+            $this->addVirtualFieldFilter($fieldName, $fieldConfig);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Add a virtual field to the filter configuration
+     *
+     * @param string $fieldName
+     * @param array $fieldConfig
+     * @return void
+     */
+    protected function addVirtualFieldFilter(string $fieldName, array $fieldConfig): void
+    {
+        // Create filter configuration for the virtual field
+        $filterConfig = [
+            'type' => $fieldConfig['type'],
+            'operators' => $fieldConfig['operators'] ?? $this->getDefaultOperatorsForType($fieldConfig['type']),
+            'required' => false,
+            'description' => $fieldConfig['description'] ?? "Virtual field: {$fieldName}",
+            'example' => [],
+            'values' => $fieldConfig['values'] ?? null,
+            'min' => $fieldConfig['min'] ?? null,
+            'max' => $fieldConfig['max'] ?? null,
+            'format' => $fieldConfig['format'] ?? null,
+            'relationship' => null, // Virtual fields don't have direct relationships
+            'searchable' => $fieldConfig['searchable'] ?? true,
+            'sortable' => $fieldConfig['sortable'] ?? true,
+            'validation' => $fieldConfig['validation'] ?? [],
+            'virtual' => true, // Mark as virtual field
+            'dependencies' => $fieldConfig['dependencies'] ?? [],
+            'relationships' => $fieldConfig['relationships'] ?? [],
+            'cacheable' => $fieldConfig['cacheable'] ?? false,
+            'cache_ttl' => $fieldConfig['cache_ttl'] ?? 3600,
+            'default_value' => $fieldConfig['default_value'] ?? null,
+            'nullable' => $fieldConfig['nullable'] ?? true
+        ];
+
+        // Validate operators for the field type
+        $validOperators = [];
+        foreach ($filterConfig['operators'] as $operator) {
+            if (isset(self::$operatorConfig[$operator])) {
+                $operatorInfo = self::$operatorConfig[$operator];
+                if (in_array($filterConfig['type'], $operatorInfo['supports'])) {
+                    $validOperators[] = $operator;
+                }
+            }
+        }
+        $filterConfig['operators'] = $validOperators;
+
+        // Generate examples
+        if (empty($filterConfig['example'])) {
+            $filterConfig['example'] = $this->generateExamples($fieldName, $filterConfig);
+        }
+
+        $this->filterConfig[$fieldName] = $filterConfig;
+        $this->enabledFilters[$fieldName] = true;
+    }
+
+    /**
+     * Get default operators for a field type
+     *
+     * @param string $type
+     * @return array
+     */
+    protected function getDefaultOperatorsForType(string $type): array
+    {
+        switch ($type) {
+            case 'string':
+                return ['eq', 'ne', 'like', 'not_like', 'in', 'not_in', 'null', 'not_null', 'starts_with', 'ends_with'];
+            case 'integer':
+            case 'float':
+                return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'null', 'not_null', 'between', 'not_between'];
+            case 'boolean':
+                return ['eq', 'ne', 'null', 'not_null'];
+            case 'date':
+            case 'datetime':
+                return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'null', 'not_null', 'between', 'not_between'];
+            case 'enum':
+                return ['eq', 'ne', 'in', 'not_in', 'null', 'not_null'];
+            case 'json':
+                return ['eq', 'ne', 'null', 'not_null'];
+            default:
+                return ['eq', 'ne', 'null', 'not_null'];
+        }
+    }
+
+    /**
+     * Check if a field is a virtual field
+     *
+     * @param string $field
+     * @return bool
+     */
+    public function isVirtualField(string $field): bool
+    {
+        return isset($this->filterConfig[$field]) && 
+               ($this->filterConfig[$field]['virtual'] ?? false);
+    }
+
+    /**
+     * Get virtual field configuration
+     *
+     * @param string $field
+     * @return array|null
+     */
+    public function getVirtualFieldConfig(string $field): ?array
+    {
+        if (!$this->isVirtualField($field)) {
+            return null;
+        }
+
+        return $this->filterConfig[$field];
+    }
+
+    /**
+     * Get all virtual fields
+     *
+     * @return array
+     */
+    public function getVirtualFields(): array
+    {
+        return array_filter($this->filterConfig, function ($config) {
+            return $config['virtual'] ?? false;
+        });
+    }
+
+    /**
      * Gerar exemplos automáticos para um campo
      *
      * @param string $field
@@ -328,6 +492,24 @@ class FilterConfigService
     }
 
     /**
+     * Get searchable virtual fields
+     *
+     * @return array
+     */
+    public function getSearchableVirtualFields(): array
+    {
+        $searchable = [];
+        
+        foreach ($this->filterConfig as $field => $config) {
+            if (($config['virtual'] ?? false) && $config['searchable']) {
+                $searchable[] = $field;
+            }
+        }
+        
+        return $searchable;
+    }
+
+    /**
      * Obter campos ordenáveis
      *
      * @return array
@@ -338,6 +520,24 @@ class FilterConfigService
         
         foreach ($this->filterConfig as $field => $config) {
             if ($config['sortable']) {
+                $sortable[] = $field;
+            }
+        }
+        
+        return $sortable;
+    }
+
+    /**
+     * Get sortable virtual fields
+     *
+     * @return array
+     */
+    public function getSortableVirtualFields(): array
+    {
+        $sortable = [];
+        
+        foreach ($this->filterConfig as $field => $config) {
+            if (($config['virtual'] ?? false) && $config['sortable']) {
                 $sortable[] = $field;
             }
         }
@@ -362,14 +562,38 @@ class FilterConfigService
      */
     public function getCompleteMetadata(): array
     {
+        // Separate regular and virtual fields
+        $regularFields = [];
+        $virtualFields = [];
+        
+        foreach ($this->filterConfig as $field => $config) {
+            if ($config['virtual'] ?? false) {
+                $virtualFields[$field] = $config;
+            } else {
+                $regularFields[$field] = $config;
+            }
+        }
+
         $metadata = [
             'enabled_filters' => array_keys($this->enabledFilters),
-            'filter_config' => $this->filterConfig,
+            'filter_config' => $regularFields,
+            'virtual_field_config' => $virtualFields,
             'available_operators' => self::$operatorConfig,
             'field_selection' => $this->fieldSelectionConfig,
             'searchable_fields' => $this->getSearchableFields(),
             'sortable_fields' => $this->getSortableFields(),
+            'virtual_fields' => [
+                'searchable' => $this->getSearchableVirtualFields(),
+                'sortable' => $this->getSortableVirtualFields(),
+                'total_count' => count($virtualFields),
+                'by_type' => $this->getVirtualFieldsByType()
+            ]
         ];
+
+        // Add virtual field service metadata if available
+        if ($this->virtualFieldService) {
+            $metadata['virtual_field_service'] = $this->virtualFieldService->getStatistics();
+        }
 
         // Adicionar guia de uso
         $metadata['usage_guide'] = [
@@ -382,9 +606,32 @@ class FilterConfigService
             'pagination' => 'Use page=1&per_page=20 para paginação',
             'field_selection' => 'Use fields=id,nome,email para selecionar campos específicos',
             'sorting' => 'Use sort_by=nome&sort_direction=asc para ordenação',
+            'virtual_fields' => 'Campos virtuais são computados dinamicamente e podem ser filtrados como campos normais'
         ];
 
         return $metadata;
+    }
+
+    /**
+     * Get virtual fields grouped by type
+     *
+     * @return array
+     */
+    protected function getVirtualFieldsByType(): array
+    {
+        $byType = [];
+        
+        foreach ($this->filterConfig as $field => $config) {
+            if ($config['virtual'] ?? false) {
+                $type = $config['type'];
+                if (!isset($byType[$type])) {
+                    $byType[$type] = [];
+                }
+                $byType[$type][] = $field;
+            }
+        }
+        
+        return $byType;
     }
 
     /**
@@ -410,6 +657,11 @@ class FilterConfigService
         // Verificar se está na lista de bloqueados
         if (in_array($field, $config['blocked_fields'])) {
             return false;
+        }
+
+        // Virtual fields are selectable if they are configured
+        if ($this->isVirtualField($field)) {
+            return true;
         }
 
         // Se allow_all_fields for true, permitir qualquer campo não bloqueado
@@ -529,5 +781,125 @@ class FilterConfigService
         }
         
         return $validOperators;
+    }
+
+    /**
+     * Validate virtual field filter request
+     *
+     * @param string $field
+     * @param string $operator
+     * @param mixed $value
+     * @return array [valid, errors]
+     */
+    public function validateVirtualFieldFilter(string $field, string $operator, $value): array
+    {
+        $errors = [];
+
+        // Check if field exists
+        if (!$this->isVirtualField($field)) {
+            $errors[] = "Virtual field '{$field}' is not configured";
+            return [false, $errors];
+        }
+
+        $config = $this->getVirtualFieldConfig($field);
+
+        // Check if operator is supported
+        if (!in_array($operator, $config['operators'])) {
+            $errors[] = "Operator '{$operator}' is not supported for virtual field '{$field}'";
+        }
+
+        // Validate value based on field type
+        $typeValidation = $this->validateValueForType($value, $config['type'], $config);
+        if (!$typeValidation[0]) {
+            $errors = array_merge($errors, $typeValidation[1]);
+        }
+
+        return [empty($errors), $errors];
+    }
+
+    /**
+     * Validate value for a specific field type
+     *
+     * @param mixed $value
+     * @param string $type
+     * @param array $config
+     * @return array [valid, errors]
+     */
+    protected function validateValueForType($value, string $type, array $config): array
+    {
+        $errors = [];
+
+        if ($value === null || $value === '') {
+            return [true, []]; // Null/empty values are generally valid
+        }
+
+        switch ($type) {
+            case 'integer':
+                if (!is_numeric($value) || !is_int($value + 0)) {
+                    $errors[] = "Value must be an integer";
+                }
+                break;
+
+            case 'float':
+                if (!is_numeric($value)) {
+                    $errors[] = "Value must be a number";
+                }
+                break;
+
+            case 'boolean':
+                $validBooleans = ['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'];
+                if (!is_bool($value) && !in_array(strtolower((string)$value), $validBooleans)) {
+                    $errors[] = "Value must be a boolean";
+                }
+                break;
+
+            case 'date':
+            case 'datetime':
+                try {
+                    if (is_string($value)) {
+                        \Carbon\Carbon::parse($value);
+                    } else {
+                        $errors[] = "Value must be a valid date string";
+                    }
+                } catch (\Exception $e) {
+                    $errors[] = "Value must be a valid date";
+                }
+                break;
+
+            case 'enum':
+                $allowedValues = $config['values'] ?? [];
+                if (!empty($allowedValues) && !in_array($value, $allowedValues)) {
+                    $errors[] = "Value must be one of: " . implode(', ', $allowedValues);
+                }
+                break;
+
+            case 'json':
+                if (is_string($value)) {
+                    json_decode($value);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $errors[] = "Value must be valid JSON";
+                    }
+                } elseif (!is_array($value) && !is_object($value)) {
+                    $errors[] = "Value must be valid JSON";
+                }
+                break;
+        }
+
+        return [empty($errors), $errors];
+    }
+
+    /**
+     * Get virtual field dependencies for query optimization
+     *
+     * @param array $virtualFields
+     * @return array
+     */
+    public function getVirtualFieldDependencies(array $virtualFields): array
+    {
+        if (!$this->virtualFieldService) {
+            return ['fields' => [], 'relationships' => []];
+        }
+
+        return $this->virtualFieldService->getRegistry()->getAllDependencies($virtualFields);
     }
 }

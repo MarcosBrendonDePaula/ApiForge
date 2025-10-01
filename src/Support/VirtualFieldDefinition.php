@@ -82,7 +82,7 @@ class VirtualFieldDefinition
      * Valid operators by field type
      */
     protected static array $operatorsByType = [
-        'string' => ['eq', 'ne', 'like', 'not_like', 'in', 'not_in', 'null', 'not_null'],
+        'string' => ['eq', 'ne', 'like', 'not_like', 'in', 'not_in', 'null', 'not_null', 'starts_with', 'ends_with'],
         'integer' => ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'in', 'not_in', 'null', 'not_null'],
         'float' => ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'in', 'not_in', 'null', 'not_null'],
         'boolean' => ['eq', 'ne', 'null', 'not_null'],

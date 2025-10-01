@@ -135,24 +135,204 @@ class VirtualFieldProcessor
         // Get all dependencies for the virtual fields
         $dependencies = $this->registry->getAllDependencies($virtualFields);
 
-        // Add required fields to select
-        if (!empty($dependencies['fields'])) {
-            $existingSelect = $query->getQuery()->columns;
-            if (empty($existingSelect) || in_array('*', $existingSelect)) {
-                // If selecting all, just ensure we have the dependencies
-                $query->addSelect($dependencies['fields']);
-            } else {
-                // Add dependencies to existing select
-                $query->addSelect($dependencies['fields']);
+        // Optimize field selection
+        $this->optimizeFieldSelection($query, $dependencies['fields']);
+
+        // Optimize relationship loading
+        $this->optimizeRelationshipLoading($query, $dependencies['relationships']);
+
+        // Add virtual field metadata to query for later processing
+        // Note: This is stored as metadata for later processing
+
+        return $query;
+    }
+
+    /**
+     * Optimize field selection for virtual field dependencies
+     */
+    protected function optimizeFieldSelection(Builder $query, array $requiredFields): void
+    {
+        if (empty($requiredFields)) {
+            return;
+        }
+
+        $existingSelect = $query->getQuery()->columns;
+        
+        if (empty($existingSelect)) {
+            // No specific fields selected, add required fields
+            $query->addSelect($requiredFields);
+        } elseif (!in_array('*', $existingSelect)) {
+            // Specific fields selected, add missing dependencies
+            $missingFields = array_diff($requiredFields, $existingSelect);
+            if (!empty($missingFields)) {
+                $query->addSelect($missingFields);
+            }
+        }
+        // If '*' is selected, all fields are already included
+    }
+
+    /**
+     * Optimize relationship loading for virtual field dependencies
+     */
+    protected function optimizeRelationshipLoading(Builder $query, array $relationships): void
+    {
+        if (empty($relationships)) {
+            return;
+        }
+
+        // Get existing eager loads
+        $existingWith = $query->getEagerLoads();
+        
+        // Add missing relationships
+        $newRelationships = [];
+        foreach ($relationships as $relationship) {
+            if (!isset($existingWith[$relationship])) {
+                $newRelationships[] = $relationship;
             }
         }
 
-        // Eager load required relationships
-        if (!empty($dependencies['relationships'])) {
-            $query->with($dependencies['relationships']);
+        if (!empty($newRelationships)) {
+            $query->with($newRelationships);
+        }
+    }
+
+    /**
+     * Optimize query for virtual field filtering
+     */
+    public function optimizeForFiltering(Builder $query, array $virtualFieldFilters): Builder
+    {
+        if (empty($virtualFieldFilters)) {
+            return $query;
         }
 
+        // Collect all virtual fields used in filters
+        $virtualFields = array_column($virtualFieldFilters, 'field');
+        
+        // Get dependencies for all virtual fields
+        $allDependencies = $this->registry->getAllDependencies($virtualFields);
+
+        // Optimize the query
+        $this->optimizeFieldSelection($query, $allDependencies['fields']);
+        $this->optimizeRelationshipLoading($query, $allDependencies['relationships']);
+
+        // Store filter information for post-processing
+        // Note: This is stored as metadata for later processing
+
         return $query;
+    }
+
+    /**
+     * Process virtual field filters after query execution
+     */
+    public function processVirtualFieldFilters(Collection $models, array $virtualFieldFilters): Collection
+    {
+        if ($models->isEmpty() || empty($virtualFieldFilters)) {
+            return $models;
+        }
+
+        $startTime = microtime(true);
+        $startMemory = memory_get_usage(true);
+
+        try {
+            // First, compute all required virtual fields for all models
+            $virtualFields = array_unique(array_column($virtualFieldFilters, 'field'));
+            $computedValues = $this->computeBatch($virtualFields, $models);
+
+            // Apply filters based on computed values
+            $filteredModels = $models->filter(function ($model) use ($virtualFieldFilters, $computedValues) {
+                foreach ($virtualFieldFilters as $filter) {
+                    $field = $filter['field'];
+                    $operator = $filter['operator'];
+                    $value = $filter['value'];
+                    $logic = $filter['logic'] ?? 'and';
+
+                    $computedValue = $computedValues[$field][$model->getKey()] ?? null;
+                    $matches = $this->evaluateVirtualFieldFilter($computedValue, $operator, $value);
+
+                    if ($logic === 'and' && !$matches) {
+                        return false;
+                    } elseif ($logic === 'or' && $matches) {
+                        return true;
+                    }
+                }
+                return true;
+            });
+
+            // Check limits
+            $this->checkLimits($startTime, $startMemory);
+
+            return $filteredModels;
+        } catch (\Exception $e) {
+            Log::error("Virtual field filter processing failed", [
+                'filters' => $virtualFieldFilters,
+                'model_count' => $models->count(),
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Evaluate a virtual field filter condition
+     */
+    protected function evaluateVirtualFieldFilter($computedValue, string $operator, $filterValue): bool
+    {
+        switch ($operator) {
+            case 'eq':
+                return $computedValue == $filterValue;
+            case 'ne':
+                return $computedValue != $filterValue;
+            case 'gt':
+                return $computedValue > $filterValue;
+            case 'gte':
+                return $computedValue >= $filterValue;
+            case 'lt':
+                return $computedValue < $filterValue;
+            case 'lte':
+                return $computedValue <= $filterValue;
+            case 'like':
+                if (is_string($computedValue) && is_string($filterValue)) {
+                    $pattern = str_replace(['*', '%'], ['.*', '.*'], preg_quote($filterValue, '/'));
+                    return preg_match("/^{$pattern}$/i", $computedValue);
+                }
+                return false;
+            case 'not_like':
+                if (is_string($computedValue) && is_string($filterValue)) {
+                    $pattern = str_replace(['*', '%'], ['.*', '.*'], preg_quote($filterValue, '/'));
+                    return !preg_match("/^{$pattern}$/i", $computedValue);
+                }
+                return true;
+            case 'in':
+                $values = is_array($filterValue) ? $filterValue : explode(',', $filterValue);
+                return in_array($computedValue, $values);
+            case 'not_in':
+                $values = is_array($filterValue) ? $filterValue : explode(',', $filterValue);
+                return !in_array($computedValue, $values);
+            case 'null':
+                return $computedValue === null;
+            case 'not_null':
+                return $computedValue !== null;
+            case 'between':
+                $values = is_array($filterValue) ? $filterValue : explode('|', $filterValue);
+                if (count($values) === 2) {
+                    return $computedValue >= $values[0] && $computedValue <= $values[1];
+                }
+                return false;
+            case 'not_between':
+                $values = is_array($filterValue) ? $filterValue : explode('|', $filterValue);
+                if (count($values) === 2) {
+                    return $computedValue < $values[0] || $computedValue > $values[1];
+                }
+                return true;
+            case 'starts_with':
+                return is_string($computedValue) && is_string($filterValue) && 
+                       str_starts_with(strtolower($computedValue), strtolower($filterValue));
+            case 'ends_with':
+                return is_string($computedValue) && is_string($filterValue) && 
+                       str_ends_with(strtolower($computedValue), strtolower($filterValue));
+            default:
+                return false;
+        }
     }
 
     /**

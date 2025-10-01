@@ -139,6 +139,9 @@ abstract class BaseApiController extends Controller
 
             $resource = $query->findOrFail($id);
 
+            // Process virtual fields for the single resource
+            $this->processVirtualFieldsForSingleResource($resource, $request);
+
             // Executar hooks afterQuery
             if ($this->hookService && $this->hookService->hasHook('afterQuery')) {
                 $this->hookService->executeAfterQuery($resource, $request, $resource);
@@ -185,6 +188,9 @@ abstract class BaseApiController extends Controller
 
             $this->applyFieldSelection($query, $request);
             $resource = $query->findOrFail($id);
+
+            // Process virtual fields for the single resource (fallback)
+            $this->processVirtualFieldsForSingleResource($resource, $request);
 
             return response()->json([
                 'success' => true,
@@ -868,5 +874,42 @@ abstract class BaseApiController extends Controller
     protected function getRegisteredHooks(): array
     {
         return $this->hookService ? $this->hookService->getHooks() : [];
+    }
+
+    /**
+     * Process virtual fields for a single resource
+     *
+     * @param mixed $resource
+     * @param Request $request
+     * @return void
+     */
+    protected function processVirtualFieldsForSingleResource($resource, Request $request): void
+    {
+        if (!$this->virtualFieldService) {
+            return;
+        }
+
+        // Get requested virtual fields from field selection
+        $fieldsParam = $request->get('fields');
+        if (!$fieldsParam) {
+            return;
+        }
+
+        $requestedFields = array_map('trim', explode(',', $fieldsParam));
+        $virtualFields = [];
+
+        foreach ($requestedFields as $field) {
+            if ($this->filterConfigService->isVirtualField($field)) {
+                $virtualFields[] = $field;
+            }
+        }
+
+        if (empty($virtualFields)) {
+            return;
+        }
+
+        // Process virtual fields for the single resource
+        $collection = collect([$resource]);
+        $this->virtualFieldService->processSelectedFields($collection, $virtualFields);
     }
 }

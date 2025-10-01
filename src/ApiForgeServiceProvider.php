@@ -9,6 +9,8 @@ use MarcosBrendon\ApiForge\Services\FilterConfigService;
 use MarcosBrendon\ApiForge\Services\DocumentationGeneratorService;
 use MarcosBrendon\ApiForge\Services\CacheService;
 use MarcosBrendon\ApiForge\Services\QueryOptimizationService;
+use MarcosBrendon\ApiForge\Services\ModelHookService;
+use MarcosBrendon\ApiForge\Services\VirtualFieldService;
 use MarcosBrendon\ApiForge\Console\Commands\GenerateDocumentationCommand;
 use MarcosBrendon\ApiForge\Console\Commands\CacheManagementCommand;
 use MarcosBrendon\ApiForge\Console\Commands\PerformanceAnalysisCommand;
@@ -74,12 +76,22 @@ class ApiForgeServiceProvider extends ServiceProvider
             return new QueryOptimizationService();
         });
 
+        $this->app->singleton(ModelHookService::class, function ($app) {
+            return new ModelHookService();
+        });
+
+        $this->app->singleton(VirtualFieldService::class, function ($app) {
+            return new VirtualFieldService();
+        });
+
         // Register aliases
         $this->app->alias(ApiFilterService::class, 'api-filter-service');
         $this->app->alias(FilterConfigService::class, 'filter-config-service');
         $this->app->alias(DocumentationGeneratorService::class, 'documentation-generator-service');
         $this->app->alias(CacheService::class, 'cache-service');
         $this->app->alias(QueryOptimizationService::class, 'query-optimization-service');
+        $this->app->alias(ModelHookService::class, 'model-hook-service');
+        $this->app->alias(VirtualFieldService::class, 'virtual-field-service');
     }
 
     /**

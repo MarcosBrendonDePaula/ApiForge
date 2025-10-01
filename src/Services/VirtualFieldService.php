@@ -437,6 +437,103 @@ class VirtualFieldService
     }
 
     /**
+     * Optimize query for virtual field selection
+     */
+    public function optimizeQueryForSelection($query, array $virtualFields): void
+    {
+        if (empty($virtualFields)) {
+            return;
+        }
+
+        // Get all dependencies for the virtual fields
+        $allDependencies = $this->registry->getAllDependencies($virtualFields);
+
+        // Add required database fields to the select
+        if (!empty($allDependencies['fields'])) {
+            $existingSelect = $query->getQuery()->columns;
+            
+            if (empty($existingSelect)) {
+                // No specific fields selected, add required fields
+                $query->addSelect($allDependencies['fields']);
+            } elseif (!in_array('*', $existingSelect)) {
+                // Specific fields selected, add missing dependencies
+                $missingFields = array_diff($allDependencies['fields'], $existingSelect);
+                if (!empty($missingFields)) {
+                    $query->addSelect($missingFields);
+                }
+            }
+        }
+
+        // Eager load required relationships
+        if (!empty($allDependencies['relationships'])) {
+            $existingWith = $query->getEagerLoads();
+            $newRelationships = [];
+            
+            foreach ($allDependencies['relationships'] as $relationship) {
+                if (!isset($existingWith[$relationship])) {
+                    $newRelationships[] = $relationship;
+                }
+            }
+
+            if (!empty($newRelationships)) {
+                $query->with($newRelationships);
+            }
+        }
+
+        if ($this->logOperations) {
+            Log::info('Optimized query for virtual field selection', [
+                'virtual_fields' => $virtualFields,
+                'dependencies' => $allDependencies
+            ]);
+        }
+    }
+
+    /**
+     * Process virtual fields for selected models
+     */
+    public function processSelectedFields(Collection $models, array $virtualFields): Collection
+    {
+        if ($models->isEmpty() || empty($virtualFields)) {
+            return $models;
+        }
+
+        try {
+            // Use the processor to compute virtual fields for all models
+            $this->processor->processForSelection($models, $virtualFields);
+
+            if ($this->logOperations) {
+                Log::info('Processed virtual fields for selection', [
+                    'virtual_fields' => $virtualFields,
+                    'model_count' => $models->count()
+                ]);
+            }
+
+            return $models;
+        } catch (\Exception $e) {
+            if ($this->throwOnFailure) {
+                throw $e;
+            }
+
+            Log::error('Failed to process virtual fields for selection', [
+                'virtual_fields' => $virtualFields,
+                'model_count' => $models->count(),
+                'error' => $e->getMessage()
+            ]);
+
+            return $models;
+        }
+    }
+
+    /**
+     * Check if a virtual field is sortable
+     */
+    public function isVirtualFieldSortable(string $field): bool
+    {
+        $definition = $this->registry->get($field);
+        return $definition && $definition->sortable;
+    }
+
+    /**
      * Get configuration value with fallback
      */
     protected function getConfig(string $key, $default = null)

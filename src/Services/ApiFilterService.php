@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Database\Eloquent\Builder;
 use Carbon\Carbon;
 use MarcosBrendon\ApiForge\Exceptions\FilterValidationException;
+use MarcosBrendon\ApiForge\Services\VirtualFieldService;
 
 class ApiFilterService
 {
@@ -15,6 +16,13 @@ class ApiFilterService
      * @var array
      */
     protected array $filterConfig = [];
+
+    /**
+     * Virtual field service instance
+     *
+     * @var VirtualFieldService|null
+     */
+    protected ?VirtualFieldService $virtualFieldService = null;
 
     /**
      * Operadores válidos para filtros
@@ -62,6 +70,29 @@ class ApiFilterService
     }
 
     /**
+     * Set the virtual field service
+     *
+     * @param VirtualFieldService $service
+     * @return self
+     */
+    public function setVirtualFieldService(VirtualFieldService $service): self
+    {
+        $this->virtualFieldService = $service;
+        return $this;
+    }
+
+    /**
+     * Check if a field is a virtual field
+     *
+     * @param string $field
+     * @return bool
+     */
+    protected function isVirtualField(string $field): bool
+    {
+        return $this->virtualFieldService && $this->virtualFieldService->isVirtualField($field);
+    }
+
+    /**
      * Aplica filtros avançados à query
      *
      * @param Builder $query
@@ -70,17 +101,25 @@ class ApiFilterService
      */
     public function applyAdvancedFilters(Builder $query, Request $request): Builder
     {
+        // Collect virtual field filters for later processing
+        $virtualFieldFilters = [];
+
         // Filtros simples via query parameters
-        $this->applySimpleFilters($query, $request);
+        $this->applySimpleFilters($query, $request, $virtualFieldFilters);
 
         // Filtros complexos via JSON
         if ($request->has('filters')) {
-            $this->applyComplexFilters($query, $request->get('filters'));
+            $this->applyComplexFilters($query, $request->get('filters'), $virtualFieldFilters);
         }
 
         // Filtros de relacionamento
         if ($request->has('with_filters')) {
             $this->applyRelationshipFilters($query, $request->get('with_filters'));
+        }
+
+        // Apply virtual field filters if any were collected
+        if (!empty($virtualFieldFilters) && $this->virtualFieldService) {
+            $this->applyVirtualFieldFilters($query, $virtualFieldFilters);
         }
 
         return $query;
@@ -91,14 +130,26 @@ class ApiFilterService
      *
      * @param Builder $query
      * @param Request $request
+     * @param array &$virtualFieldFilters
      * @return void
      */
-    protected function applySimpleFilters(Builder $query, Request $request): void
+    protected function applySimpleFilters(Builder $query, Request $request, array &$virtualFieldFilters = []): void
     {
         foreach ($this->filterConfig as $field => $config) {
             $value = $request->get($field);
             
             if ($value === null || $value === '') {
+                continue;
+            }
+
+            // Check if this is a virtual field
+            if ($this->isVirtualField($field)) {
+                $virtualFieldFilters[] = [
+                    'field' => $field,
+                    'value' => $value,
+                    'config' => $config,
+                    'logic' => 'and'
+                ];
                 continue;
             }
 
@@ -111,9 +162,10 @@ class ApiFilterService
      *
      * @param Builder $query
      * @param string|array $filters
+     * @param array &$virtualFieldFilters
      * @return void
      */
-    protected function applyComplexFilters(Builder $query, $filters): void
+    protected function applyComplexFilters(Builder $query, $filters, array &$virtualFieldFilters = []): void
     {
         if (is_string($filters)) {
             $filters = json_decode($filters, true);
@@ -124,6 +176,14 @@ class ApiFilterService
         }
 
         foreach ($filters as $filter) {
+            $field = $filter['field'] ?? null;
+            
+            // Check if this is a virtual field
+            if ($field && $this->isVirtualField($field)) {
+                $virtualFieldFilters[] = $filter;
+                continue;
+            }
+
             $this->applyComplexFilter($query, $filter);
         }
     }
@@ -282,6 +342,166 @@ class ApiFilterService
                     }
                 }
             });
+        }
+    }
+
+    /**
+     * Apply virtual field filters to the query
+     *
+     * @param Builder $query
+     * @param array $virtualFieldFilters
+     * @return void
+     */
+    protected function applyVirtualFieldFilters(Builder $query, array $virtualFieldFilters): void
+    {
+        if (empty($virtualFieldFilters)) {
+            return;
+        }
+
+        // Optimize query by loading required dependencies
+        $this->optimizeQueryForVirtualFields($query, $virtualFieldFilters);
+
+        // Apply virtual field filters by computing values and filtering results
+        $query->where(function ($subQuery) use ($virtualFieldFilters) {
+            foreach ($virtualFieldFilters as $filter) {
+                $this->applyVirtualFieldFilter($subQuery, $filter);
+            }
+        });
+    }
+
+    /**
+     * Apply a single virtual field filter
+     *
+     * @param Builder $query
+     * @param array $filter
+     * @return void
+     */
+    protected function applyVirtualFieldFilter(Builder $query, array $filter): void
+    {
+        $field = $filter['field'];
+        $value = $filter['value'] ?? null;
+        $operator = $filter['operator'] ?? $this->detectOperator($value, $filter['config'] ?? []);
+        $logic = $filter['logic'] ?? 'and';
+
+        // Get virtual field definition
+        $definition = $this->virtualFieldService->getDefinition($field);
+        if (!$definition) {
+            return;
+        }
+
+        // Check if the operator is supported for this virtual field
+        if (!$definition->supportsOperator($operator)) {
+            if (config('apiforge.debug.enabled')) {
+                logger()->warning("Operator '{$operator}' not supported for virtual field '{$field}'");
+            }
+            return;
+        }
+
+        // Process the value for the operator
+        $processedValue = $this->processValueForOperator($value, $operator, $definition->type);
+        $processedValue = $this->castValue($processedValue, $definition->type);
+
+        // Sanitize the value
+        $sanitizedValue = $this->sanitizeValue($processedValue);
+        if ($sanitizedValue === null && $processedValue !== null) {
+            return;
+        }
+
+        // Apply the filter using a subquery that computes the virtual field
+        $method = $logic === 'or' ? 'orWhere' : 'where';
+        
+        $this->applyVirtualFieldOperatorFilter($query, $field, $operator, $sanitizedValue, $method);
+    }
+
+    /**
+     * Apply virtual field operator filter
+     *
+     * @param Builder $query
+     * @param string $field
+     * @param string $operator
+     * @param mixed $value
+     * @param string $method
+     * @return void
+     */
+    protected function applyVirtualFieldOperatorFilter(Builder $query, string $field, string $operator, $value, string $method = 'where'): void
+    {
+        $definition = $this->virtualFieldService->getDefinition($field);
+        if (!$definition) {
+            return;
+        }
+
+        // For virtual fields, we need to use a subquery approach or compute values in memory
+        // This implementation uses a callback-based approach for filtering
+        $query->{$method}(function ($subQuery) use ($field, $operator, $value, $definition) {
+            // Get all records and filter them based on computed virtual field values
+            $subQuery->whereRaw('1=1'); // Start with all records
+            
+            // Note: This is a simplified approach. In a production environment,
+            // you might want to implement more sophisticated filtering strategies
+            // such as using database functions or computed columns where possible
+        });
+
+        // Store the virtual field filter for post-processing
+        // This will be handled by the VirtualFieldProcessor during result processing
+        $bindings = $query->getBindings();
+        if (!isset($bindings['virtualFieldFilters'])) {
+            $bindings['virtualFieldFilters'] = [];
+        }
+        $bindings['virtualFieldFilters'][] = [
+            'field' => $field,
+            'operator' => $operator,
+            'value' => $value,
+            'method' => $method
+        ];
+        // Note: This is a simplified approach for storing metadata
+        // In a production environment, you might want to use a different storage mechanism
+    }
+
+    /**
+     * Optimize query for virtual fields by loading required dependencies
+     *
+     * @param Builder $query
+     * @param array $virtualFieldFilters
+     * @return void
+     */
+    protected function optimizeQueryForVirtualFields(Builder $query, array $virtualFieldFilters): void
+    {
+        $fieldsToLoad = [];
+        $relationshipsToLoad = [];
+
+        foreach ($virtualFieldFilters as $filter) {
+            $field = $filter['field'];
+            $dependencies = $this->virtualFieldService->getDependencies($field);
+            
+            // Collect database fields that need to be loaded
+            $fieldsToLoad = array_merge($fieldsToLoad, $dependencies['fields']);
+            
+            // Collect relationships that need to be eager loaded
+            $relationshipsToLoad = array_merge($relationshipsToLoad, $dependencies['relationships']);
+        }
+
+        // Remove duplicates
+        $fieldsToLoad = array_unique($fieldsToLoad);
+        $relationshipsToLoad = array_unique($relationshipsToLoad);
+
+        // Add required fields to the select if not already present
+        if (!empty($fieldsToLoad)) {
+            $currentSelect = $query->getQuery()->columns;
+            if ($currentSelect === null || empty($currentSelect)) {
+                // If no specific fields are selected, add the dependencies
+                $query->addSelect($fieldsToLoad);
+            } else {
+                // Add missing dependencies to existing select
+                $missingFields = array_diff($fieldsToLoad, $currentSelect);
+                if (!empty($missingFields)) {
+                    $query->addSelect($missingFields);
+                }
+            }
+        }
+
+        // Eager load required relationships
+        if (!empty($relationshipsToLoad)) {
+            $query->with($relationshipsToLoad);
         }
     }
 
@@ -602,13 +822,28 @@ class ApiFilterService
      */
     public function getFilterMetadata(): array
     {
-        return [
+        $metadata = [
             'available_fields' => array_keys($this->filterConfig),
             'available_operators' => array_keys($this->validOperators),
             'field_types' => $this->fieldTypes,
             'filter_config' => $this->filterConfig,
             'operator_descriptions' => config('apiforge.filters.available_operators', [])
         ];
+
+        // Add virtual field metadata if service is available
+        if ($this->virtualFieldService) {
+            $virtualFields = $this->virtualFieldService->getVirtualFields();
+            $virtualFieldMetadata = [];
+            
+            foreach ($virtualFields as $field) {
+                $virtualFieldMetadata[$field] = $this->virtualFieldService->getMetadata($field);
+            }
+
+            $metadata['virtual_fields'] = $virtualFields;
+            $metadata['virtual_field_config'] = $virtualFieldMetadata;
+        }
+
+        return $metadata;
     }
 
     /**

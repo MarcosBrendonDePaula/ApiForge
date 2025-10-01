@@ -5,12 +5,14 @@ namespace MarcosBrendon\ApiForge\Traits;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use MarcosBrendon\ApiForge\Services\ApiFilterService;
 use MarcosBrendon\ApiForge\Services\FilterConfigService;
 use MarcosBrendon\ApiForge\Services\CacheService;
 use MarcosBrendon\ApiForge\Services\QueryOptimizationService;
 use MarcosBrendon\ApiForge\Services\ModelHookService;
+use MarcosBrendon\ApiForge\Services\VirtualFieldService;
 use MarcosBrendon\ApiForge\Http\Resources\PaginatedResource;
 use MarcosBrendon\ApiForge\Exceptions\FilterValidationException;
 use MarcosBrendon\ApiForge\Support\ExceptionHandler;
@@ -53,6 +55,13 @@ trait HasAdvancedFilters
     protected ?ModelHookService $hookService = null;
 
     /**
+     * Virtual field service instance
+     *
+     * @var VirtualFieldService|null
+     */
+    protected ?VirtualFieldService $virtualFieldService = null;
+
+    /**
      * Inicializar serviços de filtro
      */
     protected function initializeFilterServices(): void
@@ -75,6 +84,10 @@ trait HasAdvancedFilters
 
         if ($this->hookService === null) {
             $this->hookService = app(ModelHookService::class);
+        }
+
+        if ($this->virtualFieldService === null) {
+            $this->virtualFieldService = app(VirtualFieldService::class);
         }
 
         // Configurar filtros se o método existir
@@ -250,10 +263,14 @@ trait HasAdvancedFilters
         $sortBy = $request->get('sort_by');
         $sortDirection = $request->get('sort_direction', 'asc');
         
-        if ($sortBy && in_array($sortBy, $sortableFields)) {
+        // Check if sorting by virtual field
+        $isVirtualFieldSort = $sortBy && $this->filterConfigService->isVirtualField($sortBy);
+        
+        if ($sortBy && !$isVirtualFieldSort && in_array($sortBy, $sortableFields)) {
+            // Regular field sorting at database level
             $query->orderBy($sortBy, $sortDirection);
-        } else {
-            // Ordenação padrão
+        } elseif (!$isVirtualFieldSort) {
+            // Default sorting for non-virtual fields
             if (method_exists($this, 'getDefaultSort')) {
                 [$defaultSort, $defaultDirection] = $this->getDefaultSort();
                 $query->orderBy($defaultSort, $defaultDirection);
@@ -261,6 +278,7 @@ trait HasAdvancedFilters
                 $query->latest();
             }
         }
+        // Virtual field sorting will be handled after data retrieval
 
         // Aplicar field selection
         $this->applyFieldSelection($query, $request);
@@ -281,7 +299,19 @@ trait HasAdvancedFilters
             $query = $this->queryOptimizationService->optimizePagination($query, $page, $perPage);
         }
 
-        $paginated = $query->paginate($perPage);
+        // Handle virtual field sorting differently
+        $sortBy = $request->get('sort_by');
+        $isVirtualFieldSort = $sortBy && $this->filterConfigService->isVirtualField($sortBy);
+        
+        if ($isVirtualFieldSort) {
+            // For virtual field sorting, we need to get all records, compute virtual fields, sort, then paginate
+            $paginated = $this->paginateWithVirtualFieldSorting($query, $request, $sortBy, $sortDirection, $perPage, $page);
+        } else {
+            // Regular pagination
+            $paginated = $query->paginate($perPage);
+            // Process virtual fields for selected models if any were requested
+            $this->processVirtualFieldsForPaginatedResult($paginated, $request);
+        }
 
         return [
             'data' => $paginated,
@@ -323,12 +353,16 @@ trait HasAdvancedFilters
         // Aplicar limites
         $finalFields = $this->filterConfigService->applyFieldLimits($validFields);
         
-        // Separar campos de relacionamento
+        // Separar campos regulares, de relacionamento e virtuais
         $selectFields = [];
         $withFields = [];
+        $virtualFields = [];
         
         foreach ($finalFields as $field) {
-            if (strpos($field, '.') !== false) {
+            if ($this->filterConfigService->isVirtualField($field)) {
+                // Campo virtual
+                $virtualFields[] = $field;
+            } elseif (strpos($field, '.') !== false) {
                 // Campo de relacionamento
                 [$relation, $relationField] = explode('.', $field, 2);
                 $withFields[$relation][] = $relationField;
@@ -338,7 +372,12 @@ trait HasAdvancedFilters
             }
         }
 
-        // Aplicar seleção de campos
+        // Otimizar query para campos virtuais (carregar dependências)
+        if (!empty($virtualFields) && $this->virtualFieldService) {
+            $this->virtualFieldService->optimizeQueryForSelection($query, $virtualFields);
+        }
+
+        // Aplicar seleção de campos regulares
         if (!empty($selectFields)) {
             $query->select($selectFields);
         }
@@ -350,10 +389,271 @@ trait HasAdvancedFilters
             }]);
         }
 
+        // Armazenar campos virtuais para processamento posterior
+        if (!empty($virtualFields)) {
+            // Store virtual fields in the query metadata for later processing
+            $query->macro('getVirtualFields', function () use ($virtualFields) {
+                return $virtualFields;
+            });
+        }
+
         // Log de campos inválidos se debug estiver ativo
         if (!empty($invalidFields) && config('apiforge.debug.enabled')) {
             logger()->debug('Invalid fields in field selection', ['invalid_fields' => $invalidFields]);
         }
+    }
+
+    /**
+     * Paginate with virtual field sorting
+     *
+     * @param Builder $query
+     * @param Request $request
+     * @param string $sortBy
+     * @param string $sortDirection
+     * @param int $perPage
+     * @param int $page
+     * @return LengthAwarePaginator
+     */
+    protected function paginateWithVirtualFieldSorting(Builder $query, Request $request, string $sortBy, string $sortDirection, int $perPage, int $page)
+    {
+        // Check if virtual field is sortable
+        if (!$this->virtualFieldService->isVirtualFieldSortable($sortBy)) {
+            if (config('apiforge.virtual_fields.sort_fallback_enabled', true)) {
+                // Fall back to regular pagination without virtual field sorting
+                return $this->fallbackToRegularPagination($query, $request, $perPage);
+            }
+            throw new FilterValidationException("Virtual field '{$sortBy}' is not sortable");
+        }
+
+        // Get total count for pagination
+        $total = $query->count();
+
+        // Check if we can handle this many records
+        $maxRecords = config('apiforge.virtual_fields.max_sort_records', 10000);
+        if ($total > $maxRecords) {
+            if (config('apiforge.virtual_fields.sort_fallback_enabled', true)) {
+                // Fall back to regular pagination
+                return $this->fallbackToRegularPagination($query, $request, $perPage);
+            }
+            throw new FilterValidationException(
+                "Cannot sort by virtual field '{$sortBy}' - too many records ({$total}). Maximum allowed: {$maxRecords}"
+            );
+        }
+
+        try {
+            // Check cache first if enabled
+            $cacheKey = null;
+            if (config('apiforge.virtual_fields.sort_cache_enabled', true)) {
+                $cacheKey = $this->generateVirtualFieldSortCacheKey($query, $sortBy, $sortDirection);
+                $cached = cache()->get($cacheKey);
+                if ($cached) {
+                    return $this->createPaginatorFromCachedData($cached, $total, $perPage, $page);
+                }
+            }
+
+            // Get all records efficiently
+            $allModels = $this->getModelsForVirtualFieldSorting($query, $total);
+
+            // Compute the virtual field for all models in batches
+            $this->computeVirtualFieldInBatches($allModels, $sortBy);
+
+            // Sort by the computed virtual field
+            $sortedModels = $this->sortModelsByVirtualField($allModels, $sortBy, $sortDirection);
+
+            // Cache the sorted result if enabled
+            if ($cacheKey) {
+                $cacheTtl = config('apiforge.virtual_fields.sort_cache_ttl', 1800);
+                cache()->put($cacheKey, $sortedModels->pluck('id')->toArray(), $cacheTtl);
+            }
+
+            // Calculate pagination
+            $offset = ($page - 1) * $perPage;
+            $paginatedModels = $sortedModels->slice($offset, $perPage);
+
+            // Process any additional virtual fields for the paginated subset
+            $this->processVirtualFieldsForCollection($paginatedModels, $request);
+
+            // Create paginator
+            $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+                $paginatedModels,
+                $total,
+                $perPage,
+                $page,
+                [
+                    'path' => request()->url(),
+                    'pageName' => 'page',
+                ]
+            );
+
+            return $paginator;
+
+        } catch (\Exception $e) {
+            if (config('apiforge.virtual_fields.sort_fallback_enabled', true)) {
+                // Log the error and fall back to regular pagination
+                if (config('apiforge.debug.enabled')) {
+                    logger()->warning('Virtual field sorting failed, falling back to regular pagination', [
+                        'sort_field' => $sortBy,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+                return $this->fallbackToRegularPagination($query, $request, $perPage);
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * Fall back to regular pagination when virtual field sorting fails
+     */
+    protected function fallbackToRegularPagination(Builder $query, Request $request, int $perPage)
+    {
+        // Apply default sorting
+        if (method_exists($this, 'getDefaultSort')) {
+            [$defaultSort, $defaultDirection] = $this->getDefaultSort();
+            $query->orderBy($defaultSort, $defaultDirection);
+        } else {
+            $query->latest();
+        }
+
+        $paginated = $query->paginate($perPage);
+        $this->processVirtualFieldsForPaginatedResult($paginated, $request);
+        return $paginated;
+    }
+
+    /**
+     * Get models for virtual field sorting with memory optimization
+     */
+    protected function getModelsForVirtualFieldSorting(Builder $query, int $total): Collection
+    {
+        $batchSize = config('apiforge.virtual_fields.batch_size', 100);
+        
+        if ($total <= $batchSize) {
+            return $query->get();
+        }
+
+        // For larger datasets, use chunking to manage memory
+        $allModels = collect();
+        $query->chunk($batchSize, function ($models) use ($allModels) {
+            $allModels = $allModels->concat($models);
+        });
+
+        return $allModels;
+    }
+
+    /**
+     * Compute virtual field in batches for memory efficiency
+     */
+    protected function computeVirtualFieldInBatches(Collection $models, string $sortBy): void
+    {
+        $batchSize = config('apiforge.virtual_fields.batch_size', 100);
+        
+        if ($models->count() <= $batchSize) {
+            $this->virtualFieldService->processSelectedFields($models, [$sortBy]);
+            return;
+        }
+
+        // Process in batches
+        $models->chunk($batchSize)->each(function ($batch) use ($sortBy) {
+            $this->virtualFieldService->processSelectedFields($batch, [$sortBy]);
+        });
+    }
+
+    /**
+     * Sort models by virtual field value
+     */
+    protected function sortModelsByVirtualField(Collection $models, string $sortBy, string $sortDirection): Collection
+    {
+        $sortedModels = $models->sortBy(function ($model) use ($sortBy) {
+            return $model->getAttribute($sortBy);
+        }, SORT_REGULAR, $sortDirection === 'desc');
+
+        return $sortedModels->values();
+    }
+
+    /**
+     * Generate cache key for virtual field sorting
+     */
+    protected function generateVirtualFieldSortCacheKey(Builder $query, string $sortBy, string $sortDirection): string
+    {
+        $queryHash = md5($query->toSql() . serialize($query->getBindings()));
+        return "virtual_field_sort:{$queryHash}:{$sortBy}:{$sortDirection}";
+    }
+
+    /**
+     * Create paginator from cached sorted data
+     */
+    protected function createPaginatorFromCachedData(array $sortedIds, int $total, int $perPage, int $page)
+    {
+        // Calculate pagination
+        $offset = ($page - 1) * $perPage;
+        $paginatedIds = array_slice($sortedIds, $offset, $perPage);
+
+        // Get the models for this page
+        $modelClass = $this->getModelClass();
+        $paginatedModels = $modelClass::whereIn('id', $paginatedIds)
+            ->orderByRaw('FIELD(id, ' . implode(',', $paginatedIds) . ')')
+            ->get();
+
+        // Create paginator
+        return new \Illuminate\Pagination\LengthAwarePaginator(
+            $paginatedModels,
+            $total,
+            $perPage,
+            $page,
+            [
+                'path' => request()->url(),
+                'pageName' => 'page',
+            ]
+        );
+    }
+
+    /**
+     * Process virtual fields for paginated result
+     *
+     * @param LengthAwarePaginator $paginated
+     * @param Request $request
+     * @return void
+     */
+    protected function processVirtualFieldsForPaginatedResult($paginated, Request $request): void
+    {
+        $models = $paginated->getCollection();
+        $this->processVirtualFieldsForCollection($models, $request);
+    }
+
+    /**
+     * Process virtual fields for a collection
+     *
+     * @param Collection $models
+     * @param Request $request
+     * @return void
+     */
+    protected function processVirtualFieldsForCollection($models, Request $request): void
+    {
+        if (!$this->virtualFieldService || $models->isEmpty()) {
+            return;
+        }
+
+        // Get requested virtual fields from field selection
+        $fieldsParam = $request->get('fields');
+        if (!$fieldsParam) {
+            return;
+        }
+
+        $requestedFields = array_map('trim', explode(',', $fieldsParam));
+        $virtualFields = [];
+
+        foreach ($requestedFields as $field) {
+            if ($this->filterConfigService->isVirtualField($field)) {
+                $virtualFields[] = $field;
+            }
+        }
+
+        if (empty($virtualFields)) {
+            return;
+        }
+
+        // Process virtual fields for the collection
+        $this->virtualFieldService->processSelectedFields($models, $virtualFields);
     }
 
     /**
