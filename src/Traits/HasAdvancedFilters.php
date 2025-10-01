@@ -20,6 +20,20 @@ use MarcosBrendon\ApiForge\Support\ExceptionHandler;
 trait HasAdvancedFilters
 {
     /**
+     * Flag to prevent recursive initialization
+     *
+     * @var bool
+     */
+    protected bool $servicesInitialized = false;
+
+    /**
+     * Flag to prevent multiple configuration setups
+     *
+     * @var bool
+     */
+    protected bool $configurationSetup = false;
+
+    /**
      * Serviço de filtros
      *
      * @var ApiFilterService|null
@@ -66,6 +80,13 @@ trait HasAdvancedFilters
      */
     protected function initializeFilterServices(): void
     {
+        // Prevent recursive initialization
+        if ($this->servicesInitialized) {
+            return;
+        }
+
+        $this->servicesInitialized = true;
+
         if ($this->filterService === null) {
             $this->filterService = app(ApiFilterService::class);
         }
@@ -90,8 +111,12 @@ trait HasAdvancedFilters
             $this->virtualFieldService = app(VirtualFieldService::class);
         }
 
-        // Configurar filtros se o método existir
-        if (method_exists($this, 'setupFilterConfiguration')) {
+        // Set up cross-service dependencies
+        $this->filterConfigService->setVirtualFieldService($this->virtualFieldService);
+
+        // Configurar filtros se o método existir (only once)
+        if (method_exists($this, 'setupFilterConfiguration') && !$this->configurationSetup) {
+            $this->configurationSetup = true;
             $this->setupFilterConfiguration();
         }
     }
@@ -744,6 +769,23 @@ trait HasAdvancedFilters
     }
 
     /**
+     * Helper para configurar virtual fields
+     *
+     * @param array $config
+     * @return void
+     */
+    protected function configureVirtualFields(array $config): void
+    {
+        // Services should already be initialized, but check just in case
+        if (!$this->servicesInitialized) {
+            $this->initializeFilterServices();
+        }
+        
+        $this->virtualFieldService->registerFromConfig($config);
+        $this->filterConfigService->configureVirtualFields($config);
+    }
+
+    /**
      * Configure model hooks for CRUD operations
      *
      * @param array $config
@@ -751,7 +793,11 @@ trait HasAdvancedFilters
      */
     protected function configureModelHooks(array $config): void
     {
-        $this->initializeFilterServices();
+        // Services should already be initialized, but check just in case
+        if (!$this->servicesInitialized) {
+            $this->initializeFilterServices();
+        }
+        
         $this->hookService->registerFromConfig($config);
     }
 
@@ -1426,5 +1472,192 @@ trait HasAdvancedFilters
     {
         $this->initializeFilterServices();
         $this->hookService->clearHooks($hookType);
+    }
+
+    /**
+     * Store a new resource with hooks
+     *
+     * @param Request $request
+     * @param array $data
+     * @return JsonResponse
+     */
+    public function storeWithHooks(Request $request, array $data): JsonResponse
+    {
+        try {
+            $this->initializeFilterServices();
+            
+            $modelClass = $this->getModelClass();
+            $model = new $modelClass();
+            
+            // Fill model with data
+            $model->fill($data);
+            
+            // Create hook context
+            $context = new \stdClass();
+            $context->request = $request;
+            $context->operation = 'store';
+            
+            // Execute beforeStore hooks
+            $model = $this->hookService->execute('beforeStore', $model, $context);
+            
+            // Save the model
+            $model->save();
+            
+            // Execute afterStore hooks
+            $model = $this->hookService->execute('afterStore', $model, $context);
+            
+            return response()->json([
+                'success' => true,
+                'data' => $model,
+                'message' => 'Resource created successfully'
+            ], 201);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => [
+                    'message' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]
+            ], 500);
+        }
+    }
+
+    /**
+     * Update a resource with hooks
+     *
+     * @param Request $request
+     * @param string $id
+     * @param array $data
+     * @return JsonResponse
+     */
+    public function updateWithHooks(Request $request, string $id, array $data): JsonResponse
+    {
+        try {
+            $this->initializeFilterServices();
+            
+            $modelClass = $this->getModelClass();
+            $model = $modelClass::findOrFail($id);
+            
+            // Store original model for hooks
+            $originalModel = $model->replicate();
+            
+            // Fill model with new data
+            $model->fill($data);
+            
+            // Create hook context
+            $context = new \stdClass();
+            $context->request = $request;
+            $context->operation = 'update';
+            $context->originalModel = $originalModel;
+            
+            // Execute beforeUpdate hooks
+            $model = $this->hookService->execute('beforeUpdate', $model, $context);
+            
+            // Save the model
+            $model->save();
+            
+            // Execute afterUpdate hooks
+            $model = $this->hookService->execute('afterUpdate', $model, $context);
+            
+            return response()->json([
+                'success' => true,
+                'data' => $model,
+                'message' => 'Resource updated successfully'
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => [
+                    'message' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete a resource with hooks
+     *
+     * @param Request $request
+     * @param string $id
+     * @return JsonResponse
+     */
+    public function destroyWithHooks(Request $request, string $id): JsonResponse
+    {
+        try {
+            $this->initializeFilterServices();
+            
+            $modelClass = $this->getModelClass();
+            $model = $modelClass::findOrFail($id);
+            
+            // Create hook context
+            $context = new \stdClass();
+            $context->request = $request;
+            $context->operation = 'delete';
+            
+            // Execute beforeDelete hooks
+            $this->hookService->execute('beforeDelete', $model, $context);
+            
+            // Delete the model
+            $model->delete();
+            
+            // Execute afterDelete hooks
+            $this->hookService->execute('afterDelete', $model, $context);
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Resource deleted successfully'
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => [
+                    'message' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]
+            ], 500);
+        }
+    }
+
+    /**
+     * Show a resource with filters
+     *
+     * @param Request $request
+     * @param string $id
+     * @return JsonResponse
+     */
+    public function showWithFilters(Request $request, string $id): JsonResponse
+    {
+        try {
+            $this->initializeFilterServices();
+            
+            $modelClass = $this->getModelClass();
+            $query = $modelClass::where('id', $id);
+            
+            // Apply field selection
+            $this->applyFieldSelection($query, $request);
+            
+            $model = $query->firstOrFail();
+            
+            // Process virtual fields if any were requested
+            $this->processVirtualFieldsForCollection(collect([$model]), $request);
+            
+            return response()->json([
+                'success' => true,
+                'data' => $model
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => [
+                    'message' => $e->getMessage(),
+                    'type' => get_class($e)
+                ]
+            ], 404);
+        }
     }
 }

@@ -37,3 +37,6 @@ composer.lock
 # Build artifacts
 /build/
 /dist/
+
+# Test Laravel Application
+/test-laravel-app/

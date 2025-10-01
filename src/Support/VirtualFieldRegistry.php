@@ -17,7 +17,10 @@ class VirtualFieldRegistry
     public function add(string $fieldName, VirtualFieldDefinition $definition): void
     {
         if ($this->has($fieldName)) {
-            throw new FilterValidationException("Virtual field '{$fieldName}' is already registered");
+            // Allow re-registration with a warning instead of throwing exception
+            if (config('apiforge.debug.enabled', false)) {
+                \Log::warning("Virtual field '{$fieldName}' is being re-registered");
+            }
         }
 
         $this->fields[$fieldName] = $definition;
